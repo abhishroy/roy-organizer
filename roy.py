@@ -26,6 +26,7 @@ from roy_analytics import organization_score, recommendations, storage_overview
 from roy_tui import launch as launch_tui
 from roy_gui import launch as launch_gui
 from roy_demo import run_demo
+from roy_doctor import print_diagnostics
 
 
 def print_banner():
@@ -891,6 +892,7 @@ Commands:
   storage       Show read-only storage analytics
   gui           Open beginner planning preview
   demo          Run synthetic sandbox execute/undo demonstration
+  doctor        Run read-only installation and safety diagnostics
   dry-run       Show what would be moved without moving
   organize      Actually move files (requires confirmation)
   screenshots   Organize screenshots specifically
@@ -935,6 +937,7 @@ Examples:
     subparsers.add_parser('storage', help='Show storage analytics')
     subparsers.add_parser('gui', help='Open beginner planning preview')
     subparsers.add_parser('demo', help='Run safe synthetic sandbox demo')
+    subparsers.add_parser('doctor', help='Run read-only diagnostics')
     
     # dry-run
     dry_run_parser = subparsers.add_parser('dry-run', help='Dry run organization')
@@ -1015,6 +1018,8 @@ Examples:
         launch_gui(config)
     elif args.command == 'demo':
         print(json.dumps(run_demo(), indent=2))
+    elif args.command == 'doctor':
+        print_diagnostics(config)
     elif args.command == 'dry-run':
         cmd_dry_run(args, config)
     elif args.command == 'organize':
