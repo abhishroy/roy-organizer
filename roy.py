@@ -22,6 +22,8 @@ from roy_transactions import (
 from roy_safety import SafetyChecker, get_safety_checker
 from roy_plan import CATEGORY_CHOICES, ReviewPlan, filter_needs_review, parse_category_choices
 from roy_config import load_config, save_config
+from roy_analytics import organization_score, recommendations, storage_overview
+from roy_tui import launch as launch_tui
 
 
 def print_banner():
@@ -422,6 +424,43 @@ def cmd_protected(args, config: dict):
     with open(scan_file, 'rb') as handle:
         _, stats = pickle.load(handle)
     print_protected_summary(stats)
+
+
+def _load_scan():
+    path = pathlib.Path('data/last_scan.pkl')
+    if not path.exists():
+        return None
+    with path.open('rb') as handle:
+        return pickle.load(handle)
+
+
+def cmd_score(args, config: dict):
+    scan = _load_scan()
+    if not scan:
+        print("No scan data found. Run 'roy scan' first.")
+        return
+    files, stats = scan
+    result = organization_score(files, stats)
+    print(f"\nROY ORGANIZATION SCORE\n\n{result['overall']} / 100\n")
+    for source, score in sorted(result['sources'].items()):
+        print(f"{source:<16} {score:>3}")
+    print("\nRecommendations:")
+    for index, value in enumerate(recommendations(files, stats), 1):
+        print(f"{index}. {value}")
+    print("\nThis is a deterministic organization indicator, not system health.")
+
+
+def cmd_storage(args, config: dict):
+    scan = _load_scan()
+    if not scan:
+        print("No scan data found. Run 'roy scan' first.")
+        return
+    files, stats = scan
+    result = storage_overview(files, stats)
+    print("\nStorage overview\n")
+    for category, size in sorted(result['by_category'].items(), key=lambda item: -item[1]):
+        print(f"{category:<24} {format_size(size):>10}")
+    print(f"\nExact duplicate candidate storage: {format_size(result['exact_duplicate_bytes'])}")
 
 
 def cmd_scan(args, config: dict):
@@ -846,6 +885,8 @@ Commands:
   report        Show scan report and generate files
   review        Choose categories and build a resumable local plan
   protected     Show protected-file counts and reasons
+  score         Show deterministic organization score
+  storage       Show read-only storage analytics
   dry-run       Show what would be moved without moving
   organize      Actually move files (requires confirmation)
   screenshots   Organize screenshots specifically
@@ -886,6 +927,8 @@ Examples:
     # interactive planning (never executes file operations)
     subparsers.add_parser('review', help='Build or resume an interactive review plan')
     subparsers.add_parser('protected', help='Show protected-file summary')
+    subparsers.add_parser('score', help='Show organization score')
+    subparsers.add_parser('storage', help='Show storage analytics')
     
     # dry-run
     dry_run_parser = subparsers.add_parser('dry-run', help='Dry run organization')
@@ -958,6 +1001,10 @@ Examples:
         cmd_review(args, config)
     elif args.command == 'protected':
         cmd_protected(args, config)
+    elif args.command == 'score':
+        cmd_score(args, config)
+    elif args.command == 'storage':
+        cmd_storage(args, config)
     elif args.command == 'dry-run':
         cmd_dry_run(args, config)
     elif args.command == 'organize':
@@ -979,7 +1026,11 @@ Examples:
     elif args.command == 'config':
         cmd_config(args, config)
     else:
-        parser.print_help()
+        launch_tui(config, {
+            'review': lambda: cmd_review(args, config),
+            'protected': lambda: cmd_protected(args, config),
+            'duplicates': lambda: cmd_duplicates(argparse.Namespace(report=True, move_to_review=False, dry_run=True), config),
+        })
 
 
 if __name__ == '__main__':
