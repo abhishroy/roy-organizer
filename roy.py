@@ -1083,7 +1083,7 @@ Examples:
     # report
     subparsers.add_parser('report', help='Show report')
 
-    # interactive planning (never executes file operations)
+    # Interactive planning; controlled execution remains a separate command.
     subparsers.add_parser('review', help='Build or resume an interactive review plan')
     subparsers.add_parser('protected', help='Show protected-file summary')
     subparsers.add_parser('score', help='Show organization score')

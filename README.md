@@ -1,125 +1,170 @@
 # ROY Organizer
 
-**A privacy-first, safety-first Mac file organizer for humans and developers.**
+ROY Organizer is a safety-first, local macOS file organizer. It scans configured
+folders recursively, builds explainable plans, lets you review every proposed
+change, validates files again immediately before execution, records each move,
+verifies the result, and supports undo.
 
-> **0.1.0 Early Preview:** real-user execution is disabled by default. Use the
-> synthetic demo to exercise execute and undo safely.
-
-## What is ROY Organizer?
-
-ROY scans a messy Mac, explains organization suggestions, lets you review every
-decision, and validates approved actions immediately before any future move.
-
-`Scan → Explain → Review → Validate → Execute → Undo`
-
-## Why ROY?
-
-ROY is not a blind cleaner. It does not automatically delete or overwrite files.
-It understands developer workstations, kubeconfigs, repositories, work data, and
-company-managed Macs. Decisions are local, explainable, explicitly approved, and
-reversible. Real execution remains unavailable in this Early Preview.
+ROY is designed for personal, developer, and company-managed Macs. Normal broad
+execution remains disabled: real execution is limited to explicit, approved
+screenshot workflows.
 
 ## Features
 
-- Desktop and Downloads review; screenshots, documents, photos, videos, installers
-- General versus repository ZIP detection with personal/company/unknown origins
-- Exact-hash duplicate candidates and read-only storage analytics
-- Zsh, Oh My Zsh, Git, AWS, Kubernetes, SSH, Docker, VS Code, Terraform, Homebrew,
-  cloud tooling, AI tooling, projects, and company-security protection
-- Explainable proposals, batch review, local plans, deterministic organization score
-- Fail-closed open-file state, collisions, source-change checks, transaction metadata
-- Sandbox-only execution, undo, doctor, demo, terminal UI, GUI preview
-- Optional local Ollama suggestions, off by default; no remote AI
+- Recursive scanning across Desktop, Downloads, Documents, Pictures, and Movies
+- Rule-based classification with optional local AI suggestions via Ollama
+- Safe, persistent planning workflow
+- Interactive review before execution
+- Protected Git repository and software-project detection
+- Company/work-data and developer-configuration protection
+- Duplicate candidate detection
+- Centralized screenshot organization by capture year and month
+- Deterministic, recoverable batch execution
+- Durable transaction journaling
+- Post-execution filesystem and journal verification
+- Collision-safe undo
+- Controlled 20-file pilot mode
+- Approved screenshot-only production execution
 
-## Developer protection
+Local AI is optional and disabled by default. ROY does not require cloud inference
+and does not upload filenames or file contents.
 
-ROY explicitly protects Zsh, Oh My Zsh, Git, AWS, Kubernetes, SSH, Docker,
-Rancher Desktop, OrbStack, VS Code, Terraform, Homebrew, cloud credentials, and AI
-development tools. Software-project marker trees are excluded from bulk planning.
+## Safety Philosophy
 
-## Repository ZIP intelligence
+ROY never blindly moves files. Every real operation follows:
 
-ZIP contents are inspected without extraction or execution. General ZIPs go to
-general archive review. Strong repository structure becomes Personal Repository,
-Company Repository, or Unknown Repository. Company archives are manual-review only.
-
-## Privacy
-
-Scanning and reports are local. There is no telemetry, cloud requirement, or
-filename upload. Private `data/`, `reports/`, and `logs/` are ignored. Optional
-Ollama is local-only and disabled by default. See [PRIVACY.md](PRIVACY.md).
-
-## Safety
-
-ROY checks approval, allowed roots, protected sources/destinations, open files,
-collisions, size/mtime changes, project membership, and machine profile. It never
-silently overwrites. Sandbox moves have metadata-only transaction logs and undo.
-
-## Terminal usage
-
-```bash
-roy                  # interactive terminal home
-roy scan
-roy report
-roy review
-roy protected
-roy duplicates --report
-roy score
-roy storage
-roy status
-roy undo             # blocked on real machine in Early Preview
-roy doctor
-roy demo             # temporary synthetic filesystem only
-roy gui              # planning-only Tkinter preview
+```text
+Scan
+→ Review
+→ Validation
+→ Confirmation
+→ Execution
+→ Verification
+→ Undo (if needed)
 ```
 
-## Installation for developers
+Before execution, ROY rejects stale plans if any referenced source has disappeared.
+Every operation must already be explicitly approved and is validated again directly
+before movement. Validation checks source metadata, protected paths, repositories,
+work data, symlinks, open-file state, allowed destination roots, and collisions.
 
-```bash
-git clone https://github.com/abhishroy/roy-organizer.git
-cd roy-organizer
-./install.sh
-.venv/bin/roy doctor
+ROY never overwrites an existing destination and screenshot modes never delete
+files. Successful moves and ROY-created directories are written to a durable local
+transaction journal. Verification compares journal state with original and expected
+paths. Undo refuses to overwrite a source path that has reappeared and removes only
+empty directories that ROY itself recorded creating.
+
+## Screenshot Organization
+
+ROY gives screenshots a single organized home:
+
+```text
+Pictures/
+└── Screenshots/
+    ├── 2023/
+    ├── 2024/
+    ├── 2025/
+    └── 2026/
+        ├── 2026-01/
+        ├── 2026-02/
+        └── ...
 ```
 
-The installer creates only a repository-local virtual environment and launcher,
-requires no network or sudo, and does not edit PATH or shell configuration.
-Manual packaging alternatives (when build dependencies are available):
+Screenshots may originate anywhere beneath configured Desktop, Downloads,
+Documents, Pictures, or Movies roots. ROY detects them recursively and proposes a
+Year → Month destination based on the capture date.
+
+Production screenshot execution uses one Run ID with deterministic internal batches
+of up to 100 files. Each batch is journaled independently for interruption recovery,
+while verification, history, and undo present the operation as one user-facing run.
+Execution stops immediately if an operation is blocked; later batches do not start.
+
+## Current Commands
+
+Run commands from the repository virtual environment:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install .
-# or: pipx install .
-# or: uv tool install .
+python roy.py scan                    # refresh local inventory
+python roy.py review                  # create or resume an approved plan
+python roy.py execute --pilot         # controlled maximum-20 screenshot pilot
+python roy.py execute --screenshots   # all approved screenshots in safe batches
+python roy.py verify --last           # verify the latest controlled run
+python roy.py undo --pilot            # undo the latest pilot batch
+python roy.py undo --screenshots      # preview and undo the latest screenshot run
+python roy.py history                 # show screenshot-run history
 ```
 
-## Non-technical users
+Advanced read-only commands include `report`, `protected`, `duplicates --report`,
+`score`, `storage`, `status`, and `doctor`. `organize` and legacy broad execution
+paths remain blocked while `planning_only=true`.
 
-The GUI preview supports Scan → choose categories → review → save plan. A future
-signed app aims for Download → Open → Scan → Review. Never disable Gatekeeper or SIP.
-
-## Architecture
-
-Scanner → Classifier/Inspectors → Safety Engine → Planner → Validator →
-Sandbox Executor → Transactions/Undo, shared by CLI/TUI/GUI. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## Sandbox testing
+## Typical Workflow
 
 ```bash
-roy demo
-python -m unittest discover -s tests -v
+cd ~/Projects/roy-organizer
+source venv/bin/activate
+
+python roy.py scan
+python roy.py review
+python roy.py execute --screenshots
+# Type exactly: EXECUTE SCREENSHOTS
+
+python roy.py verify --last
+python roy.py history
 ```
 
-The demo generates a fake Mac tree under `/tmp`, moves one synthetic screenshot,
-records it, undoes it, verifies original bytes, then removes the temporary tree.
+If the verified result should be reverted:
 
-## Limitations
+```bash
+python roy.py undo --screenshots
+# Review the run, then type exactly: UNDO SCREENSHOTS
+python roy.py verify --last
+```
 
-- Early Preview and macOS-focused
-- Classification is conservative and imperfect
-- Unknown repository origins require review
-- Ollama is optional and suggestions are never authoritative
-- Real execution remains disabled pending a separately approved pilot
+Always generate a fresh scan and plan after files have moved or otherwise changed.
 
-MIT licensed. See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+## Project Structure
+
+- `roy.py` — CLI, review workflow, summaries, and command routing
+- `roy_scan.py` — recursive scanner, inventory statistics, and duplicate discovery
+- `roy_classify.py` — deterministic file classification and destination proposals
+- `roy_inspect.py` — local kubeconfig and repository-archive inspection
+- `roy_safety.py` — protected paths, projects, work data, and open-file detection
+- `roy_plan.py` — persistent review plans, decisions, filtering, and grouping
+- `roy_validate.py` — fail-closed execution-time validation
+- `roy_pilot.py` — controlled pilot and run-based screenshot execution, journal,
+  verification, history, and undo
+- `roy_transactions.py` — legacy transaction primitives for sandboxed workflows
+- `roy_executor.py` / `roy_demo.py` — temporary-directory execution and demo
+- `roy_tui.py` / `roy_gui.py` — terminal and planning GUI interfaces
+- `tests/` — unit, safety, planner, validator, and filesystem integration tests
+
+Generated plans, scan inventories, reports, and transaction logs stay local and are
+excluded from Git.
+
+## Roadmap
+
+Completed:
+
+- Screenshot organizer
+- Verification
+- Undo
+- Pilot mode
+- Screenshot execution
+- Safe execution-time validation
+
+Future:
+
+- Image organization
+- Video organization
+- Duplicate cleanup
+- Background watch mode
+- LaunchAgent integration
+- Production GUI
+- AI semantic organization
+
+ROY remains macOS-focused and intentionally conservative. Classification can be
+imperfect, so review and explicit confirmation remain part of the design.
+
+MIT licensed. See [SECURITY.md](SECURITY.md), [PRIVACY.md](PRIVACY.md), and
+[CONTRIBUTING.md](CONTRIBUTING.md).

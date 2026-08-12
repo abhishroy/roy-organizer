@@ -19,7 +19,7 @@ class ValidationResult:
 
 
 class ExecutionValidator:
-    """Validate a previously approved operation immediately before a future move."""
+    """Validate a previously approved operation immediately before movement."""
 
     def __init__(self, config: dict, safety_checker: SafetyChecker = None):
         self.config = config
