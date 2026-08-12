@@ -7,10 +7,10 @@ from contextlib import redirect_stdout
 from datetime import datetime
 from unittest.mock import patch
 
-from roy import cmd_organize, cmd_undo, print_plan_summary
+from roy import _format_review_operation, cmd_organize, cmd_undo, print_plan_summary
 from roy_classify import Category, Classifier, FileInfo
 from roy_plan import (PlanOperation, ReviewPlan, filter_needs_review,
-                      parse_category_choices)
+                      parse_category_choices, parse_source_choices)
 from roy_scan import ScanStats
 
 
@@ -50,6 +50,38 @@ class TestReviewPlan(unittest.TestCase):
                 plan = ReviewPlan.from_inventory(
                     [desktop, downloads], stats, [Category.SCREENSHOTS], ['Desktop'])
             self.assertEqual([op.source for op in plan.operations], [str(desktop.path)])
+
+    def test_category_review_defaults_to_all_nested_scan_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            roots = ('Desktop', 'Downloads', 'Documents', 'Pictures', 'Movies')
+            files = []
+            for root in roots:
+                path = home / root / 'nested' / 'deeper' / f'Screenshot-{root}.png'
+                destination = home / 'Pictures' / 'Screenshots' / '2026' / '2026-01' / path.name
+                files.append(item(path, Category.SCREENSHOTS, destination))
+            stats = ScanStats(by_category={'Screenshots': len(files)})
+
+            with patch('roy_plan.pathlib.Path.home', return_value=home):
+                plan = ReviewPlan.from_inventory(
+                    files, stats, [Category.SCREENSHOTS], parse_source_choices(''))
+
+            self.assertEqual(len(plan.operations), 5)
+            self.assertEqual(set(plan.grouped(by='source')), set(roots))
+            self.assertEqual({op.category for op in plan.operations}, {'Screenshots'})
+
+    def test_optional_source_filter_defaults_to_all(self):
+        self.assertEqual(parse_source_choices(''), set())
+        self.assertEqual(parse_source_choices('All sources'), set())
+        self.assertEqual(parse_source_choices('desktop, MOVIES'), {'Desktop', 'Movies'})
+
+    def test_item_review_displays_current_and_proposed_locations(self):
+        operation = PlanOperation('/current/nested/screenshot.png',
+                                  '/Pictures/Screenshots/2026/2026-08/screenshot.png',
+                                  'Screenshots', 1.0, 'screenshot pattern')
+        rendered = _format_review_operation(operation, 1, 1)
+        self.assertIn('CURRENT LOCATION\n/current/nested/screenshot.png', rendered)
+        self.assertIn('PROPOSED DESTINATION\n/Pictures/Screenshots', rendered)
 
     def test_code_and_work_items_never_enter_plan(self):
         root = pathlib.Path('/tmp')

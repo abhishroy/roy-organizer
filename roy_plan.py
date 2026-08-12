@@ -25,6 +25,8 @@ CATEGORY_CHOICES = {
     'R': Category.REPOSITORY_ARCHIVE,
 }
 
+DEFAULT_SOURCE_NAMES = ('Desktop', 'Downloads', 'Documents', 'Pictures', 'Movies')
+
 
 @dataclass
 class PlanOperation:
@@ -58,6 +60,16 @@ def parse_category_choices(value: str) -> Set[Category]:
     if 'A' in tokens:
         return set(SAFE_CATEGORIES)
     return {CATEGORY_CHOICES[token] for token in tokens if token in CATEGORY_CHOICES}
+
+
+def parse_source_choices(value: str,
+                         available: Iterable[str] = DEFAULT_SOURCE_NAMES) -> Set[str]:
+    """Parse an optional source restriction; blank or ``all`` means every source."""
+    requested = {token.strip().casefold() for token in value.split(',') if token.strip()}
+    if not requested or requested & {'all', 'all sources', 'a'}:
+        return set()
+    by_name = {name.casefold(): name for name in available}
+    return {by_name[token] for token in requested if token in by_name}
 
 
 def filter_needs_review(files: Iterable[FileInfo], *, extension: Optional[str] = None,

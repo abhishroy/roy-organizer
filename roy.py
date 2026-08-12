@@ -20,7 +20,9 @@ from roy_transactions import (
     create_transaction_log, create_file_mover
 )
 from roy_safety import SafetyChecker, get_safety_checker
-from roy_plan import CATEGORY_CHOICES, ReviewPlan, filter_needs_review, parse_category_choices
+from roy_plan import (CATEGORY_CHOICES, DEFAULT_SOURCE_NAMES, ReviewPlan,
+                      filter_needs_review, parse_category_choices,
+                      parse_source_choices)
 from roy_config import load_config, save_config
 from roy_analytics import organization_score, recommendations, storage_overview
 from roy_tui import launch as launch_tui
@@ -149,6 +151,10 @@ def _review_category(plan: ReviewPlan, category: Category):
         return
     groups = plan.grouped(operations, by='destination')
     print(f"\n{category.value.upper()}\n\n{len(operations):,} files found.\n")
+    print("Sources included:")
+    for source, group in sorted(plan.grouped(operations, by='source').items()):
+        print(f"  {source:<24} {len(group):>7,} files")
+    print()
     print("Grouped by destination:")
     for destination, group in sorted(groups.items()):
         print(f"  {pathlib.Path(destination).name or destination:<24} {len(group):>7,} files")
@@ -170,7 +176,7 @@ def _review_category(plan: ReviewPlan, category: Category):
                 plan.decide(group, 'skipped')
     elif choice == 'I':
         for index, operation in enumerate(operations, 1):
-            print(f"\n[{index}/{len(operations)}]\nSOURCE\n{operation.source}\n\nPROPOSED DESTINATION\n{operation.destination}")
+            print(_format_review_operation(operation, index, len(operations)))
             print(f"\nReason: {operation.reason}\nConfidence: {operation.confidence:.0%}")
             answer = input("[A]pprove [S]kip [C]hange destination [R]emaining similar [B]ack [Q]uit: ").strip().upper()
             if answer == 'A':
@@ -188,6 +194,12 @@ def _review_category(plan: ReviewPlan, category: Category):
                     plan.decide(similar, 'approved' if decision == 'A' else 'skipped')
             elif answer in {'B', 'Q'}:
                 break
+
+
+def _format_review_operation(operation, index: int, total: int) -> str:
+    """Render a proposal without hiding either side of the planned operation."""
+    return (f"\n[{index}/{total}]\nCURRENT LOCATION\n{operation.source}\n\n"
+            f"PROPOSED DESTINATION\n{operation.destination}")
 
 
 def cmd_review(args, config: dict):
@@ -283,9 +295,15 @@ def cmd_review(args, config: dict):
     categories = parse_category_choices(raw)
     if not categories:
         return
-    available_sources = ['Desktop', 'Downloads', 'Documents', 'Pictures', 'Movies']
-    source_raw = input("Source filter (comma-separated; blank = all): ").strip()
-    sources = {value.strip() for value in source_raw.split(',') if value.strip() in available_sources}
+    source_raw = input(
+        "Optional source filter "
+        "[All sources] (Desktop, Downloads, Documents, Pictures, Movies): "
+    ).strip()
+    sources = parse_source_choices(source_raw, DEFAULT_SOURCE_NAMES)
+    if not sources:
+        print("Review scope: All configured scan roots (recursive)")
+    else:
+        print(f"Review scope: {', '.join(sorted(sources))} (recursive)")
     # Rebuild proposals with current destination policy so older scan snapshots
     # cannot carry source-relative Phase 1 destinations into a new plan.
     classifier = create_classifier(config)
