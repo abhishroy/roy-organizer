@@ -257,6 +257,15 @@ class Classifier:
         filename = file_info.filename
         extension = file_info.extension
         mime_type = file_info.mime_type
+
+        # Finder aliases are pointer files, not the image/document suggested by
+        # their display name. Never classify one from its screenshot-like name.
+        if file_info.file_type and 'MacOS Alias file' in file_info.file_type:
+            file_info.category = Category.NEEDS_REVIEW
+            file_info.confidence = 1.0
+            file_info.reason = "Finder alias — automatic movement disabled"
+            file_info.needs_review = True
+            return file_info
         
         # Check for screenshots first (highest priority for Pictures)
         if self.is_screenshot(filename):

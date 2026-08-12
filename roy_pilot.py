@@ -126,6 +126,35 @@ def select_screenshot_operations(plan: ReviewPlan) -> list[PlanOperation]:
     return sorted(selected, key=lambda operation: (operation.source, operation.destination or ''))
 
 
+def save_blocked_screenshots(path: pathlib.Path, run_id: str,
+                             operations: Iterable[PlanOperation],
+                             blocked: Iterable[tuple[str, str]]) -> None:
+    """Persist blocked operations locally so they can be validated and retried."""
+    by_source = {operation.source: operation for operation in operations}
+    items = []
+    for source, reason in blocked:
+        operation = by_source.get(source)
+        if operation:
+            items.append({'operation': asdict(operation), 'blocked_reason': reason})
+    payload = {'run_id': run_id, 'created_at': _now(), 'operations': items}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+    temporary.replace(path)
+
+
+def load_blocked_screenshots(path: pathlib.Path) -> list[PlanOperation]:
+    """Load a local retry report without relaxing plan-operation validation."""
+    payload = json.loads(path.read_text())
+    items = payload.get('operations', [])
+    if not isinstance(items, list):
+        raise ValueError('malformed_blocked_screenshot_report')
+    try:
+        return [PlanOperation(**item['operation']) for item in items]
+    except (KeyError, TypeError) as error:
+        raise ValueError('malformed_blocked_screenshot_report') from error
+
+
 def missing_plan_sources(plan: ReviewPlan) -> list[str]:
     """Return every distinct source path that has disappeared since planning."""
     missing = []
@@ -237,7 +266,7 @@ class PilotExecutor:
         if confirmation != "EXECUTE SCREENSHOTS":
             return {"batch_id": None, "executed": 0,
                     "blocked": [("screenshots", "exact_confirmation_required")],
-                    "batches": []}
+                    "batches": [], "unprocessed": []}
         run_id = SCREENSHOT_PREFIX + datetime.now(timezone.utc).strftime(
             "%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:8]
         batch_results = []
@@ -251,7 +280,7 @@ class PilotExecutor:
             result = self._execute_batch(
                 selected[offset:offset + SCREENSHOT_CHUNK_SIZE], confirmation,
                 "EXECUTE SCREENSHOTS", SCREENSHOT_PREFIX, SCREENSHOT_CHUNK_SIZE,
-                batch_id=batch_id, stop_on_block=True)
+                batch_id=batch_id, stop_on_block=False)
             batch_results.append(result)
             total_executed += result['executed']
             all_blocked.extend(result['blocked'])
@@ -263,11 +292,11 @@ class PilotExecutor:
                 progress({'run_id': run_id, 'batch': number, 'batches': total_batches,
                           'moved': result['executed'], 'blocked': len(result['blocked']),
                           'elapsed': elapsed, 'remaining': remaining, 'estimate': estimate})
-            if result['blocked']:
-                break
+        processed_count = sum(result['executed'] + len(result['blocked'])
+                              for result in batch_results)
         return {"run_id": run_id, "batch_id": batch_results[-1]['batch_id'] if batch_results else None,
                 "executed": total_executed, "blocked": all_blocked,
-                "batches": batch_results}
+                "batches": batch_results, "unprocessed": selected[processed_count:]}
 
     def _execute_batch(self, selected: list[PlanOperation], confirmation: str,
                        required_confirmation: str, batch_prefix: str,

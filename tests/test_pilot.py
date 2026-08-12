@@ -8,7 +8,8 @@ from unittest.mock import patch
 from roy import cmd_execute, cmd_screenshot_undo
 from roy_pilot import (PilotExecutor, PilotJournal, PilotRecord,
                        format_pilot_block, missing_plan_sources,
-                       SCREENSHOT_PREFIX, screenshot_summary, select_pilot_operations,
+                       SCREENSHOT_PREFIX, load_blocked_screenshots,
+                       save_blocked_screenshots, screenshot_summary, select_pilot_operations,
                        select_screenshot_operations)
 from roy_plan import PlanOperation, ReviewPlan
 
@@ -347,18 +348,26 @@ class PilotCase(unittest.TestCase):
             cmd_screenshot_undo(self.config)
         self.assertTrue(all(pathlib.Path(operation.source).exists() for operation in operations))
 
-    def test_screenshot_batch_failure_stops_later_batches(self):
+    def test_screenshot_block_is_recorded_and_later_batches_continue(self):
         operations = [self.operation(f'Screenshot stop {number:03d}.png') for number in range(205)]
         collision = pathlib.Path(operations[120].destination)
         collision.parent.mkdir(parents=True, exist_ok=True)
         collision.write_bytes(b'collision')
         result = self.executor.execute_screenshots(operations, 'EXECUTE SCREENSHOTS')
-        self.assertEqual(len(result['batches']), 2)
+        self.assertEqual(len(result['batches']), 3)
         self.assertEqual(result['batches'][0]['executed'], 100)
-        self.assertEqual(result['batches'][1]['executed'], 20)
+        self.assertEqual(result['batches'][1]['executed'], 99)
+        self.assertEqual(result['batches'][2]['executed'], 5)
         self.assertEqual(len(result['blocked']), 1)
-        self.assertTrue(all(pathlib.Path(operation.source).exists()
+        self.assertTrue(pathlib.Path(operations[120].source).exists())
+        self.assertTrue(all(not pathlib.Path(operation.source).exists()
                             for operation in operations[121:]))
+        self.assertEqual(result['unprocessed'], [])
+        report = self.home / 'blocked.json'
+        save_blocked_screenshots(report, result['run_id'], operations, result['blocked'])
+        retry = load_blocked_screenshots(report)
+        self.assertEqual(len(retry), 1)
+        self.assertEqual(retry[0].source, operations[120].source)
 
 
 if __name__ == '__main__':

@@ -9,7 +9,7 @@ ROY is designed for personal, developer, and company-managed Macs. Normal broad
 execution remains disabled: real execution is limited to explicit, approved
 screenshot workflows.
 
-## Features
+## ✨ Features
 
 - Recursive scanning across Desktop, Downloads, Documents, Pictures, and Movies
 - Rule-based classification with optional local AI suggestions via Ollama
@@ -29,7 +29,7 @@ screenshot workflows.
 Local AI is optional and disabled by default. ROY does not require cloud inference
 and does not upload filenames or file contents.
 
-## Safety Philosophy
+## 🛡️ Safety Philosophy
 
 ROY never blindly moves files. Every real operation follows:
 
@@ -54,7 +54,7 @@ transaction journal. Verification compares journal state with original and expec
 paths. Undo refuses to overwrite a source path that has reappeared and removes only
 empty directories that ROY itself recorded creating.
 
-## Screenshot Organization
+## 📸 Screenshot Organization
 
 ROY gives screenshots a single organized home:
 
@@ -77,9 +77,10 @@ Year → Month destination based on the capture date.
 Production screenshot execution uses one Run ID with deterministic internal batches
 of up to 100 files. Each batch is journaled independently for interruption recovery,
 while verification, history, and undo present the operation as one user-facing run.
-Execution stops immediately if an operation is blocked; later batches do not start.
+If an operation is blocked, ROY leaves it untouched, records its reason in a local
+retry report, and continues validating later files. A retry never bypasses safety.
 
-## Current Commands
+## ⌨️ Current Commands
 
 Run commands from the repository virtual environment:
 
@@ -88,6 +89,7 @@ python roy.py scan                    # refresh local inventory
 python roy.py review                  # create or resume an approved plan
 python roy.py execute --pilot         # controlled maximum-20 screenshot pilot
 python roy.py execute --screenshots   # all approved screenshots in safe batches
+python roy.py execute --screenshots --retry-blocked  # retry only previously blocked files
 python roy.py verify --last           # verify the latest controlled run
 python roy.py undo --pilot            # undo the latest pilot batch
 python roy.py undo --screenshots      # preview and undo the latest screenshot run
@@ -98,7 +100,7 @@ Advanced read-only commands include `report`, `protected`, `duplicates --report`
 `score`, `storage`, `status`, and `doctor`. `organize` and legacy broad execution
 paths remain blocked while `planning_only=true`.
 
-## Typical Workflow
+## 🔄 Typical Workflow
 
 ```bash
 cd ~/Projects/roy-organizer
@@ -123,7 +125,7 @@ python roy.py verify --last
 
 Always generate a fresh scan and plan after files have moved or otherwise changed.
 
-## Project Structure
+## 🧱 Project Structure
 
 - `roy.py` — CLI, review workflow, summaries, and command routing
 - `roy_scan.py` — recursive scanner, inventory statistics, and duplicate discovery
@@ -142,7 +144,7 @@ Always generate a fresh scan and plan after files have moved or otherwise change
 Generated plans, scan inventories, reports, and transaction logs stay local and are
 excluded from Git.
 
-## Roadmap
+## 🗺️ Roadmap
 
 Completed:
 

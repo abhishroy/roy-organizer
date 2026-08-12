@@ -53,6 +53,16 @@ class TestClassifier(unittest.TestCase):
         self.assertTrue(self.classifier.is_screenshot("Screenshot 2026-01-01 at 12.00.00.png"))
         self.assertFalse(self.classifier.is_screenshot("photo.png"))
         self.assertFalse(self.classifier.is_screenshot("document.pdf"))
+
+    def test_finder_alias_named_like_screenshot_needs_review(self):
+        info = FileInfo(
+            path=pathlib.Path('/tmp/Screenshot 2026-08-12 at 15.24.12 alias'),
+            filename='Screenshot 2026-08-12 at 15.24.12 alias', extension='',
+            file_type='MacOS Alias file')
+        result = self.classifier.classify(info)
+        self.assertEqual(result.category, Category.NEEDS_REVIEW)
+        self.assertTrue(result.needs_review)
+        self.assertIn('alias', result.reason.lower())
     
     def test_screenshot_date_extraction(self):
         """Test date extraction from screenshot filename."""

@@ -29,7 +29,8 @@ from roy_tui import launch as launch_tui
 from roy_gui import launch as launch_gui
 from roy_demo import run_demo
 from roy_pilot import (PilotExecutor, format_pilot_block, missing_plan_sources,
-                       PILOT_PREFIX, SCREENSHOT_PREFIX, pilot_summary,
+                       PILOT_PREFIX, SCREENSHOT_PREFIX, load_blocked_screenshots,
+                       pilot_summary, save_blocked_screenshots,
                        screenshot_summary, select_pilot_operations,
                        select_screenshot_operations)
 from roy_doctor import print_diagnostics
@@ -694,11 +695,28 @@ def cmd_execute(args, config: dict):
     if not pilot_mode and not screenshot_mode:
         print("Unrestricted execution is disabled. Use --pilot or --screenshots.")
         return
+    retry_mode = bool(getattr(args, 'retry_blocked', False))
+    if retry_mode and not screenshot_mode:
+        print("Blocked screenshot retry requires --screenshots.")
+        return
+    blocked_path = pathlib.Path(config.get('logging', {}).get(
+        'blocked_screenshot_report', 'data/blocked-screenshots-latest.json'))
     plan_path = pathlib.Path(config.get('review', {}).get('plan_file', 'data/current_plan.json'))
-    if not plan_path.exists():
+    if retry_mode:
+        if not blocked_path.exists():
+            print("No blocked screenshot retry report found.")
+            return
+        try:
+            operations = load_blocked_screenshots(blocked_path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"Blocked screenshot retry report is invalid: {error}")
+            return
+        plan = ReviewPlan(operations)
+    elif not plan_path.exists():
         print("No saved review plan found.")
         return
-    plan = ReviewPlan.load(plan_path)
+    else:
+        plan = ReviewPlan.load(plan_path)
     missing_sources = missing_plan_sources(plan)
     if missing_sources:
         print("STALE PLAN\n")
@@ -710,7 +728,8 @@ def cmd_execute(args, config: dict):
             print(f"  {source}")
         if len(missing_sources) > 20:
             print(f"  ... and {len(missing_sources) - 20:,} more")
-        print(f"\nThe stale plan was retained for inspection: {plan_path}")
+        stale_source = blocked_path if retry_mode else plan_path
+        print(f"\nThe stale input was retained for inspection: {stale_source}")
         return
     operations = (select_pilot_operations(plan) if pilot_mode
                   else select_screenshot_operations(plan))
@@ -736,7 +755,13 @@ def cmd_execute(args, config: dict):
     if screenshot_mode:
         print(f"\nRun: {result['run_id']}")
         if result['blocked']:
-            print("\nExecution stopped. No later screenshot batches were processed.")
+            save_blocked_screenshots(blocked_path, result['run_id'], operations,
+                                     result['blocked'])
+            print(f"\nBlocked screenshots were left untouched and saved for retry:\n{blocked_path}")
+            print("Retry with: python roy.py execute --screenshots --retry-blocked")
+        elif retry_mode:
+            save_blocked_screenshots(blocked_path, result['run_id'], operations, [])
+            print("\nAll retry operations passed; the blocked retry list is now empty.")
     print(f"\nPilot batch: {result['batch_id'] or 'not started'}")
     print(f"Moved: {result['executed']}")
     print(f"Blocked: {len(result['blocked'])}")
@@ -1103,6 +1128,8 @@ Examples:
     execute_modes = execute_parser.add_mutually_exclusive_group()
     execute_modes.add_argument('--pilot', action='store_true', help='Run 20-file screenshot pilot')
     execute_modes.add_argument('--screenshots', action='store_true', help='Run approved screenshot batch')
+    execute_parser.add_argument('--retry-blocked', action='store_true',
+                                help='Retry screenshots from the last blocked report')
 
     verify_parser = subparsers.add_parser('verify', help='Verify pilot transaction state')
     verify_parser.add_argument('--last', action='store_true', help='Verify most recent pilot batch')
