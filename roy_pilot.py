@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -40,6 +41,32 @@ class PilotRecord:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def strong_file_hash(path: pathlib.Path) -> str:
+    """Return a streaming SHA-256 digest without retaining file contents."""
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def same_stable_file_content(source: pathlib.Path, destination: pathlib.Path) -> bool:
+    """Hash two regular files and reject content that changes during comparison."""
+    source_before = source.stat()
+    destination_before = destination.stat()
+    if source_before.st_size != destination_before.st_size:
+        return False
+    source_hash = strong_file_hash(source)
+    destination_hash = strong_file_hash(destination)
+    source_after = source.stat()
+    destination_after = destination.stat()
+    source_stable = (source_before.st_size, source_before.st_mtime_ns) == (
+        source_after.st_size, source_after.st_mtime_ns)
+    destination_stable = (destination_before.st_size, destination_before.st_mtime_ns) == (
+        destination_after.st_size, destination_after.st_mtime_ns)
+    return source_stable and destination_stable and source_hash == destination_hash
 
 
 class PilotJournal:
@@ -266,12 +293,13 @@ class PilotExecutor:
         if confirmation != "EXECUTE SCREENSHOTS":
             return {"batch_id": None, "executed": 0,
                     "blocked": [("screenshots", "exact_confirmation_required")],
-                    "batches": [], "unprocessed": []}
+                    "already_organized": [], "batches": [], "unprocessed": []}
         run_id = SCREENSHOT_PREFIX + datetime.now(timezone.utc).strftime(
             "%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:8]
         batch_results = []
         total_executed = 0
         all_blocked = []
+        all_already_organized = []
         started = time.monotonic()
         total_batches = (len(selected) + SCREENSHOT_CHUNK_SIZE - 1) // SCREENSHOT_CHUNK_SIZE
         for offset in range(0, len(selected), SCREENSHOT_CHUNK_SIZE):
@@ -284,7 +312,8 @@ class PilotExecutor:
             batch_results.append(result)
             total_executed += result['executed']
             all_blocked.extend(result['blocked'])
-            processed = total_executed + len(all_blocked)
+            all_already_organized.extend(result['already_organized'])
+            processed = total_executed + len(all_blocked) + len(all_already_organized)
             elapsed = time.monotonic() - started
             remaining = max(0, len(selected) - processed)
             estimate = (elapsed / processed * remaining) if processed else None
@@ -292,10 +321,12 @@ class PilotExecutor:
                 progress({'run_id': run_id, 'batch': number, 'batches': total_batches,
                           'moved': result['executed'], 'blocked': len(result['blocked']),
                           'elapsed': elapsed, 'remaining': remaining, 'estimate': estimate})
-        processed_count = sum(result['executed'] + len(result['blocked'])
+        processed_count = sum(result['executed'] + len(result['blocked']) +
+                              len(result['already_organized'])
                               for result in batch_results)
         return {"run_id": run_id, "batch_id": batch_results[-1]['batch_id'] if batch_results else None,
                 "executed": total_executed, "blocked": all_blocked,
+                "already_organized": all_already_organized,
                 "batches": batch_results, "unprocessed": selected[processed_count:]}
 
     def _execute_batch(self, selected: list[PlanOperation], confirmation: str,
@@ -309,16 +340,32 @@ class PilotExecutor:
             "%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:8])
         executed = 0
         blocked = []
+        already_organized = []
         for chunk_start in range(0, len(selected), chunk_size):
             for operation in selected[chunk_start:chunk_start + chunk_size]:
                 validation = self.validate(operation)  # fresh lsof snapshot and full validator per move
+                source = pathlib.Path(operation.source)
+                destination = pathlib.Path(operation.destination or "")
+                if validation == "BLOCKED reason=collision":
+                    if (source.is_file() and destination.is_file() and
+                            not source.is_symlink() and not destination.is_symlink()):
+                        try:
+                            if same_stable_file_content(source, destination):
+                                already_organized.append(operation.source)
+                                self.journal.append(PilotRecord(
+                                    "already_organized_duplicate", batch_id, _now(),
+                                    str(source), str(destination), "duplicate_noop",
+                                    operation.size, operation.mtime, operation.reason,
+                                    "ALREADY_ORGANIZED_DUPLICATE"))
+                                continue
+                        except OSError:
+                            pass
                 if validation != "SAFE_TO_EXECUTE":
                     blocked.append((operation.source, validation.removeprefix("BLOCKED reason=")))
                     if stop_on_block:
-                        return {"batch_id": batch_id, "executed": executed, "blocked": blocked}
+                        return {"batch_id": batch_id, "executed": executed, "blocked": blocked,
+                                "already_organized": already_organized}
                     continue
-                source = pathlib.Path(operation.source)
-                destination = pathlib.Path(operation.destination or "")
                 prepared = PilotRecord("prepared", batch_id, _now(), str(source), str(destination),
                                        "move", operation.size, operation.mtime, operation.reason, validation)
                 self.journal.append(prepared)
@@ -338,13 +385,15 @@ class PilotExecutor:
                 except OSError as error:
                     blocked.append((operation.source, f"filesystem_error_{type(error).__name__}"))
                     if stop_on_block:
-                        return {"batch_id": batch_id, "executed": executed, "blocked": blocked}
+                        return {"batch_id": batch_id, "executed": executed, "blocked": blocked,
+                                "already_organized": already_organized}
                     continue
                 self.journal.append(PilotRecord("executed", batch_id, _now(), str(source),
                                                str(destination), "move", operation.size,
                                                operation.mtime, operation.reason, validation))
                 executed += 1
-        return {"batch_id": batch_id, "executed": executed, "blocked": blocked}
+        return {"batch_id": batch_id, "executed": executed, "blocked": blocked,
+                "already_organized": already_organized}
 
     def _batch_state(self, batch_id: str) -> dict[str, list[PilotRecord]]:
         state: dict[str, list[PilotRecord]] = {}
@@ -457,12 +506,15 @@ class PilotExecutor:
         batch_ids = self.journal.run_batch_ids(run_id)
         executed = [record for record in records if record.batch_id in batch_ids
                     and record.event == 'executed']
+        duplicates = [record for record in records if record.batch_id in batch_ids
+                      and record.event == 'already_organized_duplicate']
         undone = {record.source for record in records if record.batch_id in batch_ids
                   and record.event == 'undone'}
         verification = self.verify_run(run_id)
         return {'run_id': run_id, 'type': 'Screenshots',
-                'timestamp': min((record.timestamp for record in executed), default=''),
-                'moved': len(executed), 'batches': len(batch_ids),
+                'timestamp': min((record.timestamp for record in executed + duplicates), default=''),
+                'moved': len(executed), 'already_organized': len(duplicates),
+                'batches': len(batch_ids),
                 'verified': verification['consistent'],
                 'undo_available': any(record.source not in undone for record in executed)}
 

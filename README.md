@@ -54,6 +54,13 @@ transaction journal. Verification compares journal state with original and expec
 paths. Undo refuses to overwrite a source path that has reappeared and removes only
 empty directories that ROY itself recorded creating.
 
+When a screenshot destination already exists, ROY compares stable SHA-256 hashes.
+Matching content is reported as `ALREADY_ORGANIZED_DUPLICATE` and left untouched;
+different content remains a collision. Screenshot-like Finder aliases are never
+deleted during normal organization. The separate cleanup command resolves them via
+local metadata and, after exact confirmation, moves only broken or redundant aliases
+to a journaled folder in the current user's Trash. ROY never empties Trash.
+
 ## 📸 Screenshot Organization
 
 ROY gives screenshots a single organized home:
@@ -90,6 +97,7 @@ python roy.py review                  # create or resume an approved plan
 python roy.py execute --pilot         # controlled maximum-20 screenshot pilot
 python roy.py execute --screenshots   # all approved screenshots in safe batches
 python roy.py execute --screenshots --retry-blocked  # retry only previously blocked files
+python roy.py cleanup --screenshot-aliases  # review eligible Finder aliases for Trash
 python roy.py verify --last           # verify the latest controlled run
 python roy.py undo --pilot            # undo the latest pilot batch
 python roy.py undo --screenshots      # preview and undo the latest screenshot run

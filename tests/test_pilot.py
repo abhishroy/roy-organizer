@@ -139,6 +139,28 @@ class PilotCase(unittest.TestCase):
         op = self.operation('collision.png'); pathlib.Path(op.destination).parent.mkdir(parents=True); pathlib.Path(op.destination).write_bytes(b'x')
         self.assertIn('collision', self.executor.validate(op))
 
+    def test_same_destination_content_is_already_organized_not_moved(self):
+        operation = self.operation('same-content.png')
+        destination = pathlib.Path(operation.destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(pathlib.Path(operation.source).read_bytes())
+        result = self.executor.execute_screenshots([operation], 'EXECUTE SCREENSHOTS')
+        self.assertEqual(result['executed'], 0)
+        self.assertEqual(result['blocked'], [])
+        self.assertEqual(result['already_organized'], [operation.source])
+        self.assertTrue(pathlib.Path(operation.source).exists())
+
+    def test_same_destination_name_different_content_stays_collision(self):
+        operation = self.operation('different-content.png')
+        destination = pathlib.Path(operation.destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b'different')
+        result = self.executor.execute_screenshots([operation], 'EXECUTE SCREENSHOTS')
+        self.assertEqual(result['executed'], 0)
+        self.assertEqual(result['already_organized'], [])
+        self.assertEqual(result['blocked'], [(operation.source, 'collision')])
+        self.assertTrue(pathlib.Path(operation.source).exists())
+
     def test_work_and_git_project_sources_are_protected(self):
         work = self.operation(source=self.desktop / 'company/Screenshot work.png')
         self.assertIn('work_data', self.executor.validate(work))

@@ -34,6 +34,7 @@ from roy_pilot import (PilotExecutor, format_pilot_block, missing_plan_sources,
                        screenshot_summary, select_pilot_operations,
                        select_screenshot_operations)
 from roy_doctor import print_diagnostics
+from roy_alias_cleanup import ScreenshotAliasCleanup, alias_cleanup_summary
 
 
 def print_banner():
@@ -764,6 +765,10 @@ def cmd_execute(args, config: dict):
             print("\nAll retry operations passed; the blocked retry list is now empty.")
     print(f"\nPilot batch: {result['batch_id'] or 'not started'}")
     print(f"Moved: {result['executed']}")
+    if screenshot_mode:
+        print(f"Already organized duplicates: {len(result.get('already_organized', []))}")
+        for source in result.get('already_organized', []):
+            print(f"  ALREADY_ORGANIZED_DUPLICATE {source}")
     print(f"Blocked: {len(result['blocked'])}")
     by_source = {operation.source: operation for operation in operations}
     for source, reason in result['blocked']:
@@ -821,8 +826,29 @@ def cmd_history(args, config: dict):
     for index, run in enumerate(runs, 1):
         print(f"Run {index}\n\nID: {run['run_id']}\nType: {run['type']}\n"
               f"Date: {run['timestamp'][:19] or 'unknown'}\nMoved: {run['moved']:,}\n"
+              f"Already organized duplicates: {run.get('already_organized', 0):,}\n"
               f"Batches: {run['batches']:,}\nVerified: {'YES' if run['verified'] else 'NO'}\n"
               f"Undo available: {'YES' if run['undo_available'] else 'NO'}\n")
+
+
+def cmd_cleanup(args, config: dict):
+    """Run explicitly confirmed, alias-only cleanup via macOS Trash."""
+    if not args.screenshot_aliases:
+        print("No cleanup mode selected. Unrestricted cleanup is disabled.")
+        return
+    cleanup = ScreenshotAliasCleanup(config)
+    candidates = cleanup.discover()
+    print(alias_cleanup_summary(candidates))
+    eligible = [item for item in candidates if item.status in {'broken', 'redundant'}]
+    if not eligible:
+        print("\nNo screenshot aliases are eligible for cleanup.")
+        return
+    confirmation = input("\nType exactly DELETE SCREENSHOT ALIASES to move eligible aliases to Trash: ")
+    result = cleanup.quarantine(candidates, confirmation)
+    print(f"\nMoved to Trash: {result['quarantined']}")
+    print(f"Blocked: {len(result['blocked'])}")
+    for path, reason in result['blocked']:
+        print(f"  BLOCKED {path}: {reason}")
 
 
 def cmd_status(args, config: dict):
@@ -1134,6 +1160,9 @@ Examples:
     verify_parser = subparsers.add_parser('verify', help='Verify pilot transaction state')
     verify_parser.add_argument('--last', action='store_true', help='Verify most recent pilot batch')
     subparsers.add_parser('history', help='Show controlled screenshot run history')
+    cleanup_parser = subparsers.add_parser('cleanup', help='Explicit safe cleanup modes')
+    cleanup_parser.add_argument('--screenshot-aliases', action='store_true',
+                                help='Review screenshot-like Finder aliases for Trash')
     
     # screenshots
     ss_parser = subparsers.add_parser('screenshots', help='Organize screenshots')
@@ -1222,6 +1251,8 @@ Examples:
         cmd_verify(args, config)
     elif args.command == 'history':
         cmd_history(args, config)
+    elif args.command == 'cleanup':
+        cmd_cleanup(args, config)
     elif args.command == 'screenshots':
         cmd_screenshots(args, config)
     elif args.command == 'downloads':
