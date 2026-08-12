@@ -1,0 +1,233 @@
+# ROY Organizer Configuration
+# Safety-first file organization for macOS
+
+# General settings
+safety:
+  # Never delete files automatically
+  never_delete: true
+  # Never modify system folders
+  protected_paths:
+    - "/System"
+    - "/Library"
+    - "/Applications"
+    - "/usr"
+    - "/bin"
+    - "/sbin"
+    - "/private"
+    - "/etc"
+    - "~/.ssh"
+    - "~/.aws"
+    - "~/.gnupg"
+    - "~/.kube"
+    - "~/Library"
+    - "~/Library/Containers/com.docker.docker"
+    - "~/Library/Containers/com.rancher.desktop"
+    - "~/Library/Containers/com.orbstack.OrbStack"
+  # Skip hidden files by default
+  skip_hidden: true
+  # Skip files in active Git repositories
+  skip_git_repos: true
+  # Skip files currently opened by applications
+  skip_open_files: true
+  # Do not change file contents
+  never_modify_contents: true
+  # Do not rename files in a way that can cause collisions
+  collision_protection: true
+  # Log every action
+  log_all_actions: true
+  # Every move must be reversible
+  require_undo: true
+  # Dry run before first organization
+  require_dry_run: true
+  # If uncertain, classify as NeedsReview
+  default_needs_review: true
+  # Never upload files or filenames to internet
+  no_network: true
+  # Run locally only
+  local_only: true
+  # Do not send personal data to external APIs
+  no_external_api: true
+  # Prefer Python standard library
+  prefer_stdlib: true
+  # Ask before installing packages requiring sudo
+  ask_before_sudo: true
+  # Do not disable security software
+  protect_security_software: true
+
+# Scan locations
+scan_paths:
+  - "~/Desktop"
+  - "~/Downloads"
+  - "~/Documents"
+  - "~/Pictures"
+  - "~/Movies"
+
+# Target folder structures
+target_structure:
+  desktop:
+    - "Inbox"
+    - "Current Projects"
+    - "Temporary"
+  downloads:
+    - "Documents"
+    - "Images"
+    - "Videos"
+    - "Audio"
+    - "Archives"
+    - "Installers"
+    - "Code"
+    - "Data"
+    - "NeedsReview"
+  documents:
+    - "Personal"
+    - "Finance"
+    - "Travel"
+    - "Dutch"
+    - "Certificates"
+    - "CV-Career"
+    - "Projects"
+    - "NeedsReview"
+  pictures:
+    - "Screenshots"
+    - "Travel"
+    - "Personal"
+    - "NeedsReview"
+  movies:
+    - "Travel"
+    - "Insta360"
+    - "GoPro"
+    - "Exports"
+    - "NeedsReview"
+
+# Classification settings
+classification:
+  # Confidence threshold for auto-classification (0.0-1.0)
+  confidence_threshold: 0.7
+  # Work-related terms that trigger WORK_REVIEW_REQUIRED
+  work_terms:
+    - "adevinta"
+    - "marktplaats"
+    - "ets"
+    - "work"
+    - "company"
+    - "prod"
+    - "production"
+    - "terraform"
+    - "kubernetes"
+    - "k8s"
+    - "jenkins"
+    - "github"
+    - "artifactory"
+    - "aws"
+    - "azure"
+    - "repo"
+    - "repository"
+    - "source"
+    - "src"
+    - "infra"
+    - "platform"
+    - "sre"
+    - "devops"
+  # Screenshot filename patterns
+  screenshot_patterns:
+    - "Screenshot * at *.png"
+    - "Screen Shot * at *.png"
+    - "Screenshot *.png"
+    - "Screen Shot *.png"
+  # File extension categories
+  extensions:
+    documents: [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".pages", ".md", ".tex"]
+    images: [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".webp", ".svg"]
+    videos: [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"]
+    audio: [".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".wma"]
+    archives: [".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".dmg", ".pkg"]
+    installers: [".dmg", ".pkg", ".app", ".exe", ".msi"]
+    code: [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp", ".c", ".h", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".clj", ".hs", ".ml", ".fs", ".vb", ".cs", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd"]
+    data: [".csv", ".tsv", ".xlsx", ".xls", ".ods", ".json", ".xml", ".sql", ".db", ".sqlite", ".parquet", ".feather"]
+
+# Duplicate detection
+duplicates:
+  # Minimum file size to check for duplicates (bytes)
+  min_size: 1024
+  # Use SHA-256 for exact duplicate confirmation
+  use_hash: true
+
+# Large file thresholds (bytes)
+large_files:
+  thresholds:
+    - name: ">500MB"
+      size: 524288000
+    - name: ">1GB"
+      size: 1073741824
+    - name: ">5GB"
+      size: 5368709120
+    - name: ">10GB"
+      size: 10737418240
+
+# AI Classification (Ollama)
+ai_classification:
+  enabled: true
+  # Model to use (must be available in Ollama)
+  model: "llava:latest"
+  # Timeout for AI requests (seconds)
+  timeout: 30
+  # Only use for specific categories
+  categories:
+    - "screenshots"
+    - "invoices"
+    - "travel_documents"
+    - "receipts"
+    - "tickets"
+    - "coding_screenshots"
+    - "maps"
+    - "photos"
+    - "memes"
+    - "work_screenshots"
+
+# Travel organization
+travel:
+  enabled: true
+  # Known destinations for high-confidence classification
+  known_destinations:
+    - "Croatia"
+    - "Norway"
+    - "Spain"
+    - "Iceland"
+    - "New-Zealand"
+  # Confidence threshold for travel classification
+  confidence_threshold: 0.8
+
+# File naming
+naming:
+  # Enable optional normalization
+  enabled: false
+  # Document format: YYYY-MM-DD_description.ext
+  document_format: "{date}_{description}.{ext}"
+  # Screenshot format: YYYY-MM-DD_HH-MM-SS_description.png
+  screenshot_format: "{date}_{time}_{description}.{ext}"
+  # Travel media format: YYYY-MM-DD_location_description_originalname.ext
+  travel_format: "{date}_{location}_{description}_{original}.{ext}"
+
+# Logging
+logging:
+  # Transaction log file
+  transaction_log: "logs/transactions.jsonl"
+  # Log level
+  level: "INFO"
+  # Console output format
+  console_format: "pretty"
+
+# Reports
+reports:
+  output_dir: "reports"
+  inventory_csv: "inventory.csv"
+  inventory_json: "inventory.json"
+  summary_md: "summary.md"
+  duplicates_csv: "duplicates.csv"
+
+# Dry run
+dry_run:
+  # Show summary at end
+  show_summary: true
+  # Ask for confirmation before proceeding
+  ask_confirmation: true

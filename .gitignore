@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# macOS
+.DS_Store
+
+# ROY generated/private data
+data/
+logs/
+reports/
+*.pkl
+
+# Environment/secrets
+.env
+.env.*
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/

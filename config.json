@@ -1,0 +1,125 @@
+{
+  "safety": {
+    "never_delete": true,
+    "protected_paths": [
+      "/System",
+      "/Library",
+      "/Applications",
+      "/usr",
+      "/bin",
+      "/sbin",
+      "/private",
+      "/etc",
+      "~/.ssh",
+      "~/.aws",
+      "~/.gnupg",
+      "~/.kube",
+      "~/Library",
+      "~/Library/Containers/com.docker.docker",
+      "~/Library/Containers/com.rancher.desktop",
+      "~/Library/Containers/com.orbstack.OrbStack"
+    ],
+    "skip_hidden": true,
+    "skip_git_repos": true,
+    "skip_open_files": true,
+    "never_modify_contents": true,
+    "collision_protection": true,
+    "log_all_actions": true,
+    "require_undo": true,
+    "require_dry_run": true,
+    "default_needs_review": true,
+    "no_network": true,
+    "local_only": true,
+    "no_external_api": true,
+    "prefer_stdlib": true,
+    "ask_before_sudo": true,
+    "protect_security_software": true
+  },
+  "scan_paths": [
+    "~/Desktop",
+    "~/Downloads",
+    "~/Documents",
+    "~/Pictures",
+    "~/Movies"
+  ],
+  "target_structure": {
+    "desktop": ["Inbox", "Current Projects", "Temporary"],
+    "downloads": ["Documents", "Images", "Videos", "Audio", "Archives", "Installers", "Code", "Data", "NeedsReview"],
+    "documents": ["Personal", "Finance", "Travel", "Dutch", "Certificates", "CV-Career", "Projects", "NeedsReview"],
+    "pictures": ["Screenshots", "Travel", "Personal", "NeedsReview"],
+    "movies": ["Travel", "Insta360", "GoPro", "Exports", "NeedsReview"]
+  },
+  "classification": {
+    "confidence_threshold": 0.7,
+    "work_terms": [
+      "adevinta", "marktplaats", "ets", "work", "company", "prod", "production",
+      "terraform", "kubernetes", "k8s", "jenkins", "github", "artifactory",
+      "aws", "azure", "repo", "repository", "source", "src", "infra",
+      "platform", "sre", "devops"
+    ],
+    "screenshot_patterns": [
+      "Screenshot * at *.png",
+      "Screen Shot * at *.png",
+      "Screenshot *.png",
+      "Screen Shot *.png"
+    ],
+    "extensions": {
+      "documents": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".pages", ".md", ".tex"],
+      "images": [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".webp", ".svg"],
+      "videos": [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"],
+      "audio": [".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".wma"],
+      "archives": [".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".dmg", ".pkg"],
+      "installers": [".dmg", ".pkg", ".app", ".exe", ".msi"],
+      "code": [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp", ".c", ".h", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".clj", ".hs", ".ml", ".fs", ".vb", ".cs", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd"],
+      "data": [".csv", ".tsv", ".xlsx", ".xls", ".ods", ".json", ".xml", ".sql", ".db", ".sqlite", ".parquet", ".feather"]
+    }
+  },
+  "duplicates": {
+    "min_size": 1024,
+    "use_hash": true
+  },
+  "large_files": {
+    "thresholds": [
+      {"name": ">500MB", "size": 524288000},
+      {"name": ">1GB", "size": 1073741824},
+      {"name": ">5GB", "size": 5368709120},
+      {"name": ">10GB", "size": 10737418240}
+    ]
+  },
+  "ai_classification": {
+    "enabled": true,
+    "model": "llava:latest",
+    "timeout": 30,
+    "categories": [
+      "screenshots", "invoices", "travel_documents", "receipts",
+      "tickets", "coding_screenshots", "maps", "photos", "memes", "work_screenshots"
+    ]
+  },
+  "travel": {
+    "enabled": true,
+    "known_destinations": ["Croatia", "Norway", "Spain", "Iceland", "New-Zealand"],
+    "confidence_threshold": 0.8
+  },
+  "naming": {
+    "enabled": false,
+    "document_format": "{date}_{description}.{ext}",
+    "screenshot_format": "{date}_{time}_{description}.{ext}",
+    "travel_format": "{date}_{location}_{description}_{original}.{ext}"
+  },
+  "logging": {
+    "transaction_log": "logs/transactions.jsonl",
+    "level": "INFO",
+    "console_format": "pretty"
+  },
+  "reports": {
+    "output_dir": "reports",
+    "inventory_csv": "inventory.csv",
+    "inventory_json": "inventory.json",
+    "summary_md": "summary.md",
+    "duplicates_csv": "duplicates.csv"
+  },
+  "dry_run": {
+    "show_summary": true,
+    "ask_confirmation": true
+  }
+}
