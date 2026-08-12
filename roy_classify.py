@@ -2,7 +2,6 @@
 ROY Organizer - Classification Module
 File classification and categorization logic.
 """
-import os
 import pathlib
 import mimetypes
 import re
@@ -19,6 +18,7 @@ class Category(Enum):
     VIDEOS = "Videos"
     AUDIO = "Audio"
     ARCHIVES = "Archives"
+    REPOSITORY_ARCHIVE = "RepositoryArchive"
     INSTALLERS = "Installers"
     CODE = "Code"
     DATA = "Data"
@@ -56,6 +56,9 @@ class FileInfo:
     hash: Optional[str] = None
     needs_review: bool = False
     work_review: bool = False
+    protection_type: Optional[str] = None
+    archive_origin: Optional[str] = None
+    archive_owner: Optional[str] = None
     
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -77,6 +80,9 @@ class FileInfo:
             'hash': self.hash,
             'needs_review': self.needs_review,
             'work_review': self.work_review,
+            'protection_type': self.protection_type,
+            'archive_origin': self.archive_origin,
+            'archive_owner': self.archive_owner,
         }
 
 
@@ -330,114 +336,65 @@ class Classifier:
         return file_info
     
     def propose_destination(self, file_info: FileInfo, config: dict) -> Optional[pathlib.Path]:
-        """Propose a destination path for a file."""
-        target_structure = config.get('target_structure', {})
+        """Propose a centralized destination; protected categories get no proposal."""
         home = pathlib.Path.home()
-        
-        # Determine base directory based on source location
-        source_path = file_info.path
-        try:
-            source_relative = source_path.relative_to(home)
-            first_part = source_relative.parts[0] if source_relative.parts else ""
-        except Exception:
-            first_part = ""
-        
-        # Map source to target structure
-        if first_part == "Desktop":
-            base = home / "Desktop"
-            folders = target_structure.get('desktop', [])
-        elif first_part == "Downloads":
-            base = home / "Downloads"
-            folders = target_structure.get('downloads', [])
-        elif first_part == "Documents":
-            base = home / "Documents"
-            folders = target_structure.get('documents', [])
-        elif first_part == "Pictures":
-            base = home / "Pictures"
-            folders = target_structure.get('pictures', [])
-        elif first_part == "Movies":
-            base = home / "Movies"
-            folders = target_structure.get('movies', [])
-        else:
-            # Default to Downloads/NeedsReview
-            base = home / "Downloads"
-            folders = target_structure.get('downloads', [])
-        
-        # Determine subfolder based on category
         cat = file_info.category
+        if file_info.work_review or cat in {
+            Category.CODE, Category.PROJECTS, Category.NEEDS_REVIEW,
+            Category.WORK_REVIEW_REQUIRED, Category.UNKNOWN
+        }:
+            return None
+
+        configured = config.get('destinations', {})
+        defaults = {
+            Category.IMAGES: '~/Pictures/Organized',
+            Category.VIDEOS: '~/Movies/Organized',
+            Category.AUDIO: '~/Music/Organized',
+            Category.ARCHIVES: '~/Downloads/Archives',
+            Category.INSTALLERS: '~/Downloads/Installers',
+            Category.DOCUMENTS: '~/Documents/Organized',
+            Category.CV_CAREER: '~/Documents/CV-Career',
+            Category.FINANCE: '~/Documents/Finance',
+            Category.TRAVEL: '~/Documents/Travel',
+            Category.CERTIFICATES: '~/Documents/Certificates',
+            Category.PERSONAL: '~/Documents/Personal',
+            Category.DATA: '~/Documents/Data',
+            Category.REPOSITORY_ARCHIVE: '~/Downloads/Archives/Repositories/Unknown',
+        }
+
+        def expand_destination(value: str) -> pathlib.Path:
+            if value == '~':
+                return home
+            if value.startswith('~/'):
+                return home / value[2:]
+            return pathlib.Path(value)
+
+        def destination_root(category: Category) -> pathlib.Path:
+            value = configured.get(category.value, defaults.get(category, '~/Downloads/Organized'))
+            return expand_destination(value)
         
         if cat == Category.SCREENSHOTS:
-            # Screenshots go to Pictures/Screenshots/YYYY/YYYY-MM/
-            date = file_info.created or file_info.modified or datetime.now()
+            date = self.extract_screenshot_date(file_info.filename) or file_info.created or file_info.modified or datetime.now()
             year = date.strftime("%Y")
             month = date.strftime("%Y-%m")
-            return base / "Screenshots" / year / month / file_info.filename
+            root = expand_destination(configured.get('Screenshots', '~/Pictures/Screenshots'))
+            return root / year / month / file_info.filename
         
         elif cat == Category.TRAVEL:
-            # Travel files go to appropriate Travel folder
             dest, _ = self.detect_travel_destination(file_info.filename, file_info.path)
             if dest:
-                if first_part == "Pictures":
-                    return home / "Pictures" / "Travel" / dest / file_info.filename
-                elif first_part == "Movies":
-                    return home / "Movies" / "Travel" / dest / file_info.filename
-                else:
-                    return home / "Documents" / "Travel" / dest / file_info.filename
-            return base / "Travel" / file_info.filename
-        
-        elif cat == Category.DOCUMENTS:
-            # Documents: try to sub-categorize
-            name_cat, _, _ = self.classify_by_filename(file_info.filename)
-            subfolder_map = {
-                'finance': 'Finance',
-                'travel': 'Travel',
-                'certificates': 'Certificates',
-                'cv_career': 'CV-Career',
-                'projects': 'Projects',
-                'personal': 'Personal',
-            }
-            subfolder = subfolder_map.get(name_cat, 'Personal')
-            return base / subfolder / file_info.filename
-        
-        elif cat == Category.IMAGES:
-            return base / "Images" / file_info.filename
-        
-        elif cat == Category.VIDEOS:
-            return base / "Videos" / file_info.filename
-        
-        elif cat == Category.AUDIO:
-            return base / "Audio" / file_info.filename
-        
+                return destination_root(cat) / dest / file_info.filename
         elif cat == Category.ARCHIVES:
-            return base / "Archives" / file_info.filename
-        
-        elif cat == Category.INSTALLERS:
-            return base / "Installers" / file_info.filename
-        
-        elif cat == Category.CODE:
-            return base / "Code" / file_info.filename
-        
-        elif cat == Category.DATA:
-            return base / "Data" / file_info.filename
-        
-        elif cat == Category.PERSONAL:
-            return base / "Personal" / file_info.filename
-        
-        elif cat == Category.FINANCE:
-            return base / "Finance" / file_info.filename
-        
-        elif cat == Category.CERTIFICATES:
-            return base / "Certificates" / file_info.filename
-        
-        elif cat == Category.CV_CAREER:
-            return base / "CV-Career" / file_info.filename
-        
-        elif cat == Category.PROJECTS:
-            return base / "Projects" / file_info.filename
-        
-        else:
-            # NeedsReview or unknown
-            return base / "NeedsReview" / file_info.filename
+            return pathlib.Path(home / 'Downloads/Archives/General') / file_info.filename
+        elif cat == Category.REPOSITORY_ARCHIVE:
+            if file_info.archive_origin == 'personal':
+                root = home / 'Downloads/Archives/Repositories/Personal' / (file_info.archive_owner or 'Unknown')
+            elif file_info.archive_origin in {'company', 'company_internal'}:
+                return None
+            else:
+                root = home / 'Downloads/Archives/Repositories/Unknown'
+            return root / file_info.filename
+        return destination_root(cat) / file_info.filename
 
 
 def create_classifier(config: dict) -> Classifier:

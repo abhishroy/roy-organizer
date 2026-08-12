@@ -14,26 +14,14 @@ from typing import Optional, List
 
 # Use stdlib only - no external dependencies
 from roy_scan import Scanner, create_scanner, ScanStats
-from roy_classify import FileInfo, Category
+from roy_classify import FileInfo, Category, create_classifier
 from roy_transactions import (
     TransactionLog, FileMover, 
     create_transaction_log, create_file_mover
 )
 from roy_safety import SafetyChecker, get_safety_checker
-
-
-def load_config(config_path: pathlib.Path) -> dict:
-    """Load configuration from JSON file."""
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            return json.load(f)
-    return {}
-
-
-def save_config(config: dict, config_path: pathlib.Path):
-    """Save configuration to JSON file."""
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
+from roy_plan import CATEGORY_CHOICES, ReviewPlan, filter_needs_review, parse_category_choices
+from roy_config import load_config, save_config
 
 
 def print_banner():
@@ -58,6 +46,10 @@ def print_stats(stats: ScanStats):
     print(f"│ Work Review:      {stats.work_review:>10,} │")
     print(f"│ Duplicate Pairs:  {len(stats.duplicates):>10,} │")
     print("└────────────────────────────────────────┘")
+    print()
+    print(f"Open-file state: {getattr(stats, 'open_file_state', 'UNKNOWN')}")
+    if getattr(stats, 'open_file_error', None):
+        print("Planning may continue, but execution validation is blocked.")
     print()
     
     # By category
@@ -117,6 +109,192 @@ def format_size(size: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} PB"
+
+
+def print_plan_summary(plan: ReviewPlan):
+    """Print a planning-only final summary."""
+    summary = plan.summary()
+    print("\nFINAL PLAN\n")
+    print(f"Approved moves:     {summary['approved']:>7,}")
+    print(f"Skipped:            {summary['skipped']:>7,}")
+    print(f"Pending review:     {summary['pending']:>7,}")
+    print(f"Data to move:       {format_size(summary['data_to_move']):>10}")
+    if summary['by_category']:
+        print("\nBy category:")
+        for category, count in sorted(summary['by_category'].items()):
+            print(f"  {category:<20} {count:>7,}")
+    print("\nProtected:")
+    print(f"  Code                {summary['protected_code']:>7,}")
+    print(f"  Work Review         {summary['protected_work']:>7,}")
+    print(f"\nDuplicate pairs:      {summary['duplicate_pairs']:>7,}")
+    print("No duplicates will be deleted.")
+    print("\nPlanning only: execution is disabled in Phase 2.")
+
+
+def _show_needs_review(items, page=0, page_size=25):
+    start = page * page_size
+    print(f"\nNEEDS REVIEW — showing {start + 1}-{min(start + page_size, len(items))} of {len(items):,}")
+    for item in items[start:start + page_size]:
+        print(f"  {item.path}  ({format_size(item.size)})")
+
+
+def _review_category(plan: ReviewPlan, category: Category):
+    operations = plan.filtered(category=category.value)
+    if not operations:
+        return
+    groups = plan.grouped(operations, by='destination')
+    print(f"\n{category.value.upper()}\n\n{len(operations):,} files found.\n")
+    print("Grouped by destination:")
+    for destination, group in sorted(groups.items()):
+        print(f"  {pathlib.Path(destination).name or destination:<24} {len(group):>7,} files")
+    print("\n[A] Approve all  [M] Review destination groups  [I] Review files  [S] Skip all  [B] Back")
+    choice = input("Choose: ").strip().upper()
+    if choice == 'A':
+        plan.decide(operations, 'approved')
+    elif choice == 'S':
+        plan.decide(operations, 'skipped')
+    elif choice == 'M':
+        dimension = input("Group by [D]estination [E]xtension [S]ource [C]onfidence: ").strip().upper()
+        group_by = {'D': 'destination', 'E': 'extension', 'S': 'source', 'C': 'confidence'}.get(dimension, 'destination')
+        selected_groups = plan.grouped(operations, by=group_by)
+        for label, group in sorted(selected_groups.items()):
+            answer = input(f"{label} ({len(group):,}) [A]pprove/[S]kip/[P]ending: ").strip().upper()
+            if answer == 'A':
+                plan.decide(group, 'approved')
+            elif answer == 'S':
+                plan.decide(group, 'skipped')
+    elif choice == 'I':
+        for index, operation in enumerate(operations, 1):
+            print(f"\n[{index}/{len(operations)}]\nSOURCE\n{operation.source}\n\nPROPOSED DESTINATION\n{operation.destination}")
+            print(f"\nReason: {operation.reason}\nConfidence: {operation.confidence:.0%}")
+            answer = input("[A]pprove [S]kip [C]hange destination [R]emaining similar [B]ack [Q]uit: ").strip().upper()
+            if answer == 'A':
+                plan.decide([operation], 'approved')
+            elif answer == 'S':
+                plan.decide([operation], 'skipped')
+            elif answer == 'C':
+                destination = input("Destination directory: ").strip()
+                if destination:
+                    plan.change_destination(operation, pathlib.Path(destination))
+            elif answer == 'R':
+                decision = input("Apply [A]pprove or [S]kip to this destination group: ").strip().upper()
+                if decision in {'A', 'S'}:
+                    similar = groups[str(pathlib.Path(operation.destination).parent)]
+                    plan.decide(similar, 'approved' if decision == 'A' else 'skipped')
+            elif answer in {'B', 'Q'}:
+                break
+
+
+def cmd_review(args, config: dict):
+    """Interactively build or resume a local, planning-only review plan."""
+    scan_path = pathlib.Path('data/last_scan.pkl')
+    plan_path = pathlib.Path(config.get('review', {}).get('plan_file', 'data/current_plan.json'))
+    if not scan_path.exists():
+        print("No scan data found. Run 'roy scan' first.")
+        return
+    with open(scan_path, 'rb') as handle:
+        files, stats = pickle.load(handle)
+
+    if plan_path.exists():
+        answer = input("Resume saved plan? [y/N]: ").strip().lower()
+        if answer == 'y':
+            plan = ReviewPlan.load(plan_path)
+            for value in plan.selected_categories:
+                try:
+                    _review_category(plan, Category(value))
+                except ValueError:
+                    continue
+                plan.save(plan_path)
+            print_plan_summary(plan)
+            input("\n[M] Modify later  [S] Save and exit  [Q] Quit: ")
+            return
+
+    profile = config.get('machine_profile', 'personal').replace('_', ' ').title()
+    print("╭──────────────────────────────────────────╮")
+    print("│              ROY ORGANIZER               │")
+    print("│          Safe Planning Review            │")
+    print("╰──────────────────────────────────────────╯\n")
+    print(f"Machine profile: {profile}\n")
+    reasons = getattr(stats, 'protected_by_reason', {})
+    print("Protected:")
+    print(f"  Software projects       {reasons.get('software_project', 0):>8,}")
+    print(f"  Work/company files      {reasons.get('work_data', 0):>8,}")
+    print(f"  Developer config        {reasons.get('developer_config', 0):>8,}")
+    print(f"  Kubernetes configs      {reasons.get('kubernetes_config', 0):>8,}\n")
+    print("Available for review:\n")
+    for key, category in CATEGORY_CHOICES.items():
+        if category == Category.REPOSITORY_ARCHIVE:
+            personal = sum(f.category == category and f.archive_origin == 'personal' for f in files)
+            unknown = sum(f.category == category and f.archive_origin == 'unknown' for f in files)
+            company = sum(f.category == category and f.archive_origin in {'company', 'company_internal'} for f in files)
+            print(f"[{key}] Personal/unknown repo ZIPs {personal + unknown:>6,} files")
+            print(f"    Company repo ZIPs          {company:>6,} PROTECTED")
+        else:
+            print(f"[{key}] {category.value:<18} {stats.by_category.get(category.value, 0):>8,} files")
+    print(f"[D] Duplicate review   {len(stats.duplicates):>8,} pairs")
+    print(f"[N] Needs Review       {stats.needs_review:>8,} files")
+    print("[P] Protected summary")
+    print("\n[A] Select all safe categories\n[Q] Quit")
+    raw = input("\nEnter choices (default: none): ").strip()
+    if not raw or raw.upper() == 'Q':
+        print("No categories selected.")
+        return
+    tokens = {token.strip().upper() for token in raw.split(',')}
+    if 'P' in tokens:
+        print_protected_summary(stats)
+    if 'N' in tokens:
+        page = 0
+        review_items = filter_needs_review(files)
+        while True:
+            _show_needs_review(review_items, page)
+            action = input("[N]ext [F]irst [E]xtension [O]source [Z]size [D]ate [/]search [Q]back: ").strip().upper()
+            if action == 'N':
+                page += 1
+            elif action == 'F':
+                page = 0
+            elif action == 'E':
+                review_items = filter_needs_review(files, extension=input("Extension: ").strip())
+                page = 0
+            elif action == 'O':
+                review_items = filter_needs_review(files, source=input("Source: ").strip())
+                page = 0
+            elif action == 'Z':
+                minimum = input("Minimum bytes (blank none): ").strip()
+                maximum = input("Maximum bytes (blank none): ").strip()
+                review_items = filter_needs_review(files, min_size=int(minimum) if minimum else None,
+                                                   max_size=int(maximum) if maximum else None)
+                page = 0
+            elif action == 'D':
+                value = input("Modified on/after YYYY-MM-DD: ").strip()
+                review_items = filter_needs_review(files, modified_after=datetime.fromisoformat(value))
+                page = 0
+            elif action == '/':
+                review_items = filter_needs_review(files, search=input("Filename search: ").strip())
+                page = 0
+            else:
+                break
+    if 'D' in tokens:
+        print(f"\n{len(stats.duplicates):,} duplicate pairs are available for review. No deletion is planned.")
+    categories = parse_category_choices(raw)
+    if not categories:
+        return
+    available_sources = ['Desktop', 'Downloads', 'Documents', 'Pictures', 'Movies']
+    source_raw = input("Source filter (comma-separated; blank = all): ").strip()
+    sources = {value.strip() for value in source_raw.split(',') if value.strip() in available_sources}
+    # Rebuild proposals with current destination policy so older scan snapshots
+    # cannot carry source-relative Phase 1 destinations into a new plan.
+    classifier = create_classifier(config)
+    for item in files:
+        item.proposed_destination = classifier.propose_destination(item, config)
+    plan = ReviewPlan.from_inventory(files, stats, categories, sources)
+    for category in sorted(categories, key=lambda value: value.value):
+        _review_category(plan, category)
+        plan.save(plan_path)
+    print_plan_summary(plan)
+    choice = input("\n[M] Modify later  [S] Save and exit  [Q] Quit: ").strip().upper()
+    if choice in {'M', 'S'}:
+        plan.save(plan_path)
+        print(f"Plan saved to {plan_path}")
 
 
 def generate_reports(files: List[FileInfo], stats: ScanStats, config: dict):
@@ -215,6 +393,35 @@ def generate_reports(files: List[FileInfo], stats: ScanStats, config: dict):
     print(f"  - {md_path.name}")
     if stats.duplicates:
         print(f"  - {dup_csv_path.name}")
+
+
+def print_protected_summary(stats: ScanStats):
+    labels = {
+        'software_project': 'Software projects', 'hidden_file': 'Hidden files',
+        'work_data': 'Work/company files', 'open_file': 'Open files',
+        'developer_config': 'Developer configuration',
+        'kubernetes_config': 'Kubernetes configuration',
+        'company_security': 'Company security tooling',
+        'company_repository_archive': 'Company repository ZIPs',
+        'protected_path': 'Protected system paths',
+    }
+    print("\nProtected files\n")
+    reasons = getattr(stats, 'protected_by_reason', {})
+    for key, label in labels.items():
+        print(f"{label:<28} {reasons.get(key, 0):>10,}")
+    print(f"{'Total':<28} {sum(reasons.values()):>10,}")
+    print(f"\nOpen-file state: {getattr(stats, 'open_file_state', 'UNKNOWN')}")
+
+
+def cmd_protected(args, config: dict):
+    """Show read-only protected counts from the last scan."""
+    scan_file = pathlib.Path('data/last_scan.pkl')
+    if not scan_file.exists():
+        print("No scan data found. Run 'roy scan' first.")
+        return
+    with open(scan_file, 'rb') as handle:
+        _, stats = pickle.load(handle)
+    print_protected_summary(stats)
 
 
 def cmd_scan(args, config: dict):
@@ -318,6 +525,9 @@ def cmd_dry_run(args, config: dict):
 
 def cmd_organize(args, config: dict):
     """Organize command - actually move files."""
+    if config.get('safety', {}).get('planning_only', True):
+        print("Execution is disabled in Phase 2. Use 'roy review' to build a plan.")
+        return
     data_dir = pathlib.Path('data')
     scan_file = data_dir / 'last_scan.pkl'
     
@@ -372,6 +582,9 @@ def cmd_organize(args, config: dict):
 
 def cmd_undo(args, config: dict):
     """Undo command."""
+    if config.get('safety', {}).get('planning_only', True):
+        print("Execution is disabled in Phase 2. Undo is unavailable in planning-only mode.")
+        return
     transaction_log = create_transaction_log(config)
     mover = create_file_mover(config, transaction_log)
     mover.set_dry_run(args.dry_run)
@@ -465,6 +678,9 @@ def cmd_screenshots(args, config: dict):
     
     print(f"Found {len(screenshots)} screenshots")
     
+    if args.organize and config.get('safety', {}).get('planning_only', True):
+        print("Execution is disabled in Phase 2. Use 'roy review'.")
+        return
     if args.dry_run or args.organize:
         transaction_log = create_transaction_log(config)
         mover = create_file_mover(config, transaction_log)
@@ -496,6 +712,9 @@ def cmd_downloads(args, config: dict):
     
     print(f"Found {len(downloads)} files in Downloads")
     
+    if args.organize and config.get('safety', {}).get('planning_only', True):
+        print("Execution is disabled in Phase 2. Use 'roy review'.")
+        return
     if args.dry_run or args.organize:
         transaction_log = create_transaction_log(config)
         mover = create_file_mover(config, transaction_log)
@@ -527,6 +746,9 @@ def cmd_desktop(args, config: dict):
     
     print(f"Found {len(desktop)} files on Desktop")
     
+    if args.organize and config.get('safety', {}).get('planning_only', True):
+        print("Execution is disabled in Phase 2. Use 'roy review'.")
+        return
     if args.dry_run or args.organize:
         transaction_log = create_transaction_log(config)
         mover = create_file_mover(config, transaction_log)
@@ -563,6 +785,9 @@ def cmd_duplicates(args, config: dict):
         dup_csv = reports_dir / config.get('reports', {}).get('duplicates_csv', 'duplicates.csv')
         print(f"Duplicate report: {dup_csv}")
     
+    if args.move_to_review and config.get('safety', {}).get('planning_only', True):
+        print("Execution is disabled in Phase 2. Duplicate review is read-only.")
+        return
     if args.move_to_review and not args.dry_run:
         # Move duplicates to review folder
         review_dir = pathlib.Path.home() / "Desktop" / "ROY-Duplicate-Review"
@@ -619,6 +844,8 @@ def main():
 Commands:
   scan          Scan configured directories and build inventory
   report        Show scan report and generate files
+  review        Choose categories and build a resumable local plan
+  protected     Show protected-file counts and reasons
   dry-run       Show what would be moved without moving
   organize      Actually move files (requires confirmation)
   screenshots   Organize screenshots specifically
@@ -655,6 +882,10 @@ Examples:
     
     # report
     subparsers.add_parser('report', help='Show report')
+
+    # interactive planning (never executes file operations)
+    subparsers.add_parser('review', help='Build or resume an interactive review plan')
+    subparsers.add_parser('protected', help='Show protected-file summary')
     
     # dry-run
     dry_run_parser = subparsers.add_parser('dry-run', help='Dry run organization')
@@ -723,6 +954,10 @@ Examples:
         cmd_scan(args, config)
     elif args.command == 'report':
         cmd_report(args, config)
+    elif args.command == 'review':
+        cmd_review(args, config)
+    elif args.command == 'protected':
+        cmd_protected(args, config)
     elif args.command == 'dry-run':
         cmd_dry_run(args, config)
     elif args.command == 'organize':

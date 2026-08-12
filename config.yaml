@@ -1,6 +1,10 @@
 # ROY Organizer Configuration
 # Safety-first file organization for macOS
 
+machine_profile: developer_company_managed
+developer_mode: true
+company_managed: true
+
 # General settings
 safety:
   # Never delete files automatically
@@ -15,10 +19,19 @@ safety:
     - "/sbin"
     - "/private"
     - "/etc"
+    - "/opt/homebrew"
+    - "/usr/local"
     - "~/.ssh"
     - "~/.aws"
     - "~/.gnupg"
     - "~/.kube"
+    - "~/.azure"
+    - "~/.config/gcloud"
+    - "~/.terraform.d"
+    - "~/.docker"
+    - "~/.vscode"
+    - "~/.config/git"
+    - "~/.oh-my-zsh"
     - "~/Library"
     - "~/Library/Containers/com.docker.docker"
     - "~/Library/Containers/com.rancher.desktop"
@@ -53,6 +66,8 @@ safety:
   ask_before_sudo: true
   # Do not disable security software
   protect_security_software: true
+  # Phase 2 creates plans only; all execution paths remain disabled
+  planning_only: true
 
 # Scan locations
 scan_paths:
@@ -98,6 +113,26 @@ target_structure:
     - "GoPro"
     - "Exports"
     - "NeedsReview"
+
+# Centralized destinations (never source-relative unless explicitly configured)
+destinations:
+  Screenshots: "~/Pictures/Screenshots"
+  Images: "~/Pictures/Organized"
+  Videos: "~/Movies/Organized"
+  Audio: "~/Music/Organized"
+  Archives: "~/Downloads/Archives"
+  Installers: "~/Downloads/Installers"
+  Documents: "~/Documents/Organized"
+  CV-Career: "~/Documents/CV-Career"
+  Finance: "~/Documents/Finance"
+  Travel: "~/Documents/Travel"
+  Certificates: "~/Documents/Certificates"
+  Personal: "~/Documents/Personal"
+  Data: "~/Documents/Data"
+
+review:
+  plan_file: "data/current_plan.json"
+  page_size: 25
 
 # Classification settings
 classification:

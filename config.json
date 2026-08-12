@@ -1,4 +1,7 @@
 {
+  "machine_profile": "developer_company_managed",
+  "developer_mode": true,
+  "company_managed": true,
   "safety": {
     "never_delete": true,
     "protected_paths": [
@@ -10,10 +13,19 @@
       "/sbin",
       "/private",
       "/etc",
+      "/opt/homebrew",
+      "/usr/local",
       "~/.ssh",
       "~/.aws",
       "~/.gnupg",
       "~/.kube",
+      "~/.azure",
+      "~/.config/gcloud",
+      "~/.terraform.d",
+      "~/.docker",
+      "~/.vscode",
+      "~/.config/git",
+      "~/.oh-my-zsh",
       "~/Library",
       "~/Library/Containers/com.docker.docker",
       "~/Library/Containers/com.rancher.desktop",
@@ -33,7 +45,8 @@
     "no_external_api": true,
     "prefer_stdlib": true,
     "ask_before_sudo": true,
-    "protect_security_software": true
+    "protect_security_software": true,
+    "planning_only": true
   },
   "scan_paths": [
     "~/Desktop",
@@ -48,6 +61,25 @@
     "documents": ["Personal", "Finance", "Travel", "Dutch", "Certificates", "CV-Career", "Projects", "NeedsReview"],
     "pictures": ["Screenshots", "Travel", "Personal", "NeedsReview"],
     "movies": ["Travel", "Insta360", "GoPro", "Exports", "NeedsReview"]
+  },
+  "destinations": {
+    "Screenshots": "~/Pictures/Screenshots",
+    "Images": "~/Pictures/Organized",
+    "Videos": "~/Movies/Organized",
+    "Audio": "~/Music/Organized",
+    "Archives": "~/Downloads/Archives",
+    "Installers": "~/Downloads/Installers",
+    "Documents": "~/Documents/Organized",
+    "CV-Career": "~/Documents/CV-Career",
+    "Finance": "~/Documents/Finance",
+    "Travel": "~/Documents/Travel",
+    "Certificates": "~/Documents/Certificates",
+    "Personal": "~/Documents/Personal",
+    "Data": "~/Documents/Data"
+  },
+  "review": {
+    "plan_file": "data/current_plan.json",
+    "page_size": 25
   },
   "classification": {
     "confidence_threshold": 0.7,

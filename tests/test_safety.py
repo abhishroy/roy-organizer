@@ -74,6 +74,31 @@ class TestSafetyChecker(unittest.TestCase):
             with patch('roy_safety.pathlib.Path.home', return_value=home):
                 self.assertFalse(self.checker.is_in_git_repo(normal_file))
                 self.assertTrue(self.checker.is_in_git_repo(repo_file))
+
+    def test_project_markers_protect_project_internals(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = pathlib.Path(tmpdir)
+            project = home / 'Documents' / 'project'
+            project.mkdir(parents=True)
+            (project / 'pyproject.toml').write_text('[project]')
+            source = project / 'src' / 'main.py'
+            source.parent.mkdir()
+            source.write_text('print("safe")')
+            normal = home / 'Documents' / 'notes.py'
+            normal.write_text('# note')
+            with patch('roy_safety.pathlib.Path.home', return_value=home):
+                self.assertTrue(self.checker.is_in_software_project(source))
+                self.assertFalse(self.checker.is_in_software_project(normal))
+
+    @patch('roy_safety.subprocess.run')
+    def test_open_files_are_loaded_once_and_cached(self, run):
+        run.return_value.stdout = 'p123\nn/tmp/open.txt\nn/tmp/other.txt\n'
+        run.return_value.returncode = 0
+        self.checker.prepare_open_files()
+        self.assertTrue(self.checker.is_open_by_app(pathlib.Path('/tmp/open.txt')))
+        self.assertFalse(self.checker.is_open_by_app(pathlib.Path('/tmp/closed.txt')))
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ['lsof', '-Fn'])
     
     def test_check_source_safe(self):
         """Test checking a safe source file."""

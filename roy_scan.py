@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from roy_classify import FileInfo, Classifier, create_classifier, Category
 from roy_safety import SafetyChecker, get_safety_checker, SafetyCheckResult
+from roy_inspect import inspect_zip
 
 
 @dataclass
@@ -35,6 +36,9 @@ class ScanStats:
     skipped: int = 0
     needs_review: int = 0
     work_review: int = 0
+    protected_by_reason: Dict[str, int] = None
+    open_file_state: str = "NOT_CHECKED"
+    open_file_error: Optional[str] = None
     
     def __post_init__(self):
         if self.by_category is None:
@@ -47,6 +51,8 @@ class ScanStats:
             self.oldest_files = []
         if self.duplicates is None:
             self.duplicates = []
+        if self.protected_by_reason is None:
+            self.protected_by_reason = {}
 
 
 class Scanner:
@@ -99,6 +105,19 @@ class Scanner:
             
             # Classify
             file_info = self.classifier.classify(file_info)
+
+            if file_info.extension == '.zip':
+                archive = inspect_zip(path)
+                if archive.is_repository:
+                    file_info.category = Category.REPOSITORY_ARCHIVE
+                    file_info.confidence = archive.confidence
+                    file_info.reason = archive.reason
+                    file_info.archive_origin = archive.origin
+                    file_info.archive_owner = archive.owner
+                    if archive.origin in {'company', 'company_internal'}:
+                        file_info.work_review = True
+                        file_info.protection_type = 'COMPANY_REPOSITORY_ARCHIVE'
+                        file_info.reason = 'Company repository archive — manual review required'
             
             # Propose destination
             file_info.proposed_destination = self.classifier.propose_destination(file_info, self.config)
@@ -142,6 +161,9 @@ class Scanner:
         
         # Collect all files first
         all_paths = []
+        self.safety_checker.prepare_open_files()
+        stats.open_file_state = self.safety_checker.open_file_state
+        stats.open_file_error = self.safety_checker.open_file_error
         for scan_path in self.scan_paths:
             if scan_path.exists():
                 print(f"Scanning {scan_path.name}........ ", end="", flush=True)
@@ -153,6 +175,8 @@ class Scanner:
                         count += 1
                     else:
                         stats.skipped += 1
+                        reason = result.skip_reason or "unknown"
+                        stats.protected_by_reason[reason] = stats.protected_by_reason.get(reason, 0) + 1
                         # Track work_review for skipped files
                         if result.skip_reason == "work_data":
                             stats.work_review += 1
@@ -210,6 +234,9 @@ class Scanner:
                         stats.needs_review += 1
                     if file_info.work_review:
                         stats.work_review += 1
+                    if file_info.protection_type:
+                        key = file_info.protection_type.lower()
+                        stats.protected_by_reason[key] = stats.protected_by_reason.get(key, 0) + 1
                     
                     # Track for duplicate detection
                     if file_info.size >= self.min_duplicate_size:
