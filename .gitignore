@@ -25,3 +25,8 @@ reports/
 # IDE
 .vscode/
 .idea/
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+*.whl

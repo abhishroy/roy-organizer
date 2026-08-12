@@ -1,18 +1,2 @@
-# ROY Organizer - Python dependencies
-# Prefer stdlib where possible
-
-# YAML configuration
-pyyaml>=6.0
-
-# Rich terminal output
-rich>=13.0
-
-# For file type detection
-python-magic>=0.4.27
-
-# For Ollama API (optional, only if AI classification enabled)
-requests>=2.31.0
-
-# For testing
-pytest>=7.0
-pytest-cov>=4.0
+# ROY Organizer 0.1.0 uses only the Python standard library at runtime.
+# Tests run with unittest; no test dependency installation is required.
