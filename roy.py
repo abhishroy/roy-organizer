@@ -28,6 +28,8 @@ from roy_analytics import organization_score, recommendations, storage_overview
 from roy_tui import launch as launch_tui
 from roy_gui import launch as launch_gui
 from roy_demo import run_demo
+from roy_pilot import (PilotExecutor, format_pilot_block, missing_plan_sources,
+                       pilot_summary, select_pilot_operations)
 from roy_doctor import print_diagnostics
 
 
@@ -665,6 +667,72 @@ def cmd_undo(args, config: dict):
             print("No batches to undo")
 
 
+def _pilot_executor(config: dict) -> PilotExecutor:
+    log_path = pathlib.Path(config.get('logging', {}).get(
+        'pilot_transaction_log', 'logs/pilot-transactions.jsonl'))
+    return PilotExecutor(config, log_path)
+
+
+def cmd_execute(args, config: dict):
+    """Run only the separately gated screenshot pilot."""
+    if not args.pilot:
+        print("Unrestricted execution is disabled. Use --pilot for the controlled screenshot pilot.")
+        return
+    plan_path = pathlib.Path(config.get('review', {}).get('plan_file', 'data/current_plan.json'))
+    if not plan_path.exists():
+        print("No saved review plan found.")
+        return
+    plan = ReviewPlan.load(plan_path)
+    missing_sources = missing_plan_sources(plan)
+    if missing_sources:
+        print("STALE PLAN\n")
+        print(f"The saved plan references {len(missing_sources):,} source file(s) that no longer exist.")
+        print("No operations were processed. Generate a new plan before executing:")
+        print("\n  python roy.py scan\n  python roy.py review")
+        print("\nMissing source paths:")
+        for source in missing_sources[:20]:
+            print(f"  {source}")
+        if len(missing_sources) > 20:
+            print(f"  ... and {len(missing_sources) - 20:,} more")
+        print(f"\nThe stale plan was retained for inspection: {plan_path}")
+        return
+    operations = select_pilot_operations(plan)
+    print(pilot_summary(operations))
+    if not operations:
+        print("\nNo approved screenshot operations are eligible.")
+        return
+    confirmation = input("\nType exactly EXECUTE PILOT to continue: ")
+    result = _pilot_executor(config).execute(operations, confirmation)
+    print(f"\nPilot batch: {result['batch_id'] or 'not started'}")
+    print(f"Moved: {result['executed']}")
+    print(f"Blocked: {len(result['blocked'])}")
+    by_source = {operation.source: operation for operation in operations}
+    for source, reason in result['blocked']:
+        print(f"\nBLOCKED\n\n{format_pilot_block(by_source.get(source), reason)}")
+
+
+def cmd_verify(args, config: dict):
+    if not args.last:
+        print("Verification requires --last.")
+        return
+    result = _pilot_executor(config).verify_last()
+    print(f"Pilot batch: {result['batch_id'] or 'none'}")
+    print(f"Moved files verified: {result['moved']}")
+    print(f"Transaction log consistent: {'YES' if result['consistent'] else 'NO'}")
+    print(f"Anomalies: {len(result['anomalies'])}")
+    for anomaly in result['anomalies']:
+        print(f"  {anomaly}")
+
+
+def cmd_pilot_undo(config: dict):
+    result = _pilot_executor(config).undo_last()
+    print(f"Pilot batch: {result['batch_id'] or 'none'}")
+    print(f"Restored: {result['undone']}")
+    print(f"Blocked: {len(result['blocked'])}")
+    for source, reason in result['blocked']:
+        print(f"  BLOCKED {source}: {reason}")
+
+
 def cmd_status(args, config: dict):
     """Status command - show transaction log summary."""
     transaction_log = create_transaction_log(config)
@@ -963,6 +1031,12 @@ Examples:
     
     # organize
     subparsers.add_parser('organize', help='Organize files')
+
+    execute_parser = subparsers.add_parser('execute', help='Controlled execution (pilot only)')
+    execute_parser.add_argument('--pilot', action='store_true', help='Run screenshot-only pilot')
+
+    verify_parser = subparsers.add_parser('verify', help='Verify pilot transaction state')
+    verify_parser.add_argument('--last', action='store_true', help='Verify most recent pilot batch')
     
     # screenshots
     ss_parser = subparsers.add_parser('screenshots', help='Organize screenshots')
@@ -993,6 +1067,7 @@ Examples:
     undo_parser.add_argument('--last', type=int, help='Undo last N batches')
     undo_parser.add_argument('--batch', help='Undo specific batch ID')
     undo_parser.add_argument('--dry-run', action='store_true', help='Dry run')
+    undo_parser.add_argument('--pilot', action='store_true', help='Undo most recent pilot batch only')
     
     # status
     subparsers.add_parser('status', help='Show transaction status')
@@ -1042,6 +1117,10 @@ Examples:
         cmd_dry_run(args, config)
     elif args.command == 'organize':
         cmd_organize(args, config)
+    elif args.command == 'execute':
+        cmd_execute(args, config)
+    elif args.command == 'verify':
+        cmd_verify(args, config)
     elif args.command == 'screenshots':
         cmd_screenshots(args, config)
     elif args.command == 'downloads':
@@ -1053,7 +1132,10 @@ Examples:
     elif args.command == 'large-files':
         cmd_large_files(args, config)
     elif args.command == 'undo':
-        cmd_undo(args, config)
+        if args.pilot:
+            cmd_pilot_undo(config)
+        else:
+            cmd_undo(args, config)
     elif args.command == 'status':
         cmd_status(args, config)
     elif args.command == 'config':

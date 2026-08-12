@@ -140,6 +140,7 @@
   },
   "logging": {
     "transaction_log": "logs/transactions.jsonl",
+    "pilot_transaction_log": "logs/pilot-transactions.jsonl",
     "level": "INFO",
     "console_format": "pretty"
   },
