@@ -201,7 +201,7 @@ large_files:
 
 # AI Classification (Ollama)
 ai_classification:
-  enabled: true
+  enabled: false
   # Model to use (must be available in Ollama)
   model: "llava:latest"
   # Timeout for AI requests (seconds)

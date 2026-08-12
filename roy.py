@@ -24,6 +24,7 @@ from roy_plan import CATEGORY_CHOICES, ReviewPlan, filter_needs_review, parse_ca
 from roy_config import load_config, save_config
 from roy_analytics import organization_score, recommendations, storage_overview
 from roy_tui import launch as launch_tui
+from roy_gui import launch as launch_gui
 
 
 def print_banner():
@@ -887,6 +888,7 @@ Commands:
   protected     Show protected-file counts and reasons
   score         Show deterministic organization score
   storage       Show read-only storage analytics
+  gui           Open beginner planning preview
   dry-run       Show what would be moved without moving
   organize      Actually move files (requires confirmation)
   screenshots   Organize screenshots specifically
@@ -929,6 +931,7 @@ Examples:
     subparsers.add_parser('protected', help='Show protected-file summary')
     subparsers.add_parser('score', help='Show organization score')
     subparsers.add_parser('storage', help='Show storage analytics')
+    subparsers.add_parser('gui', help='Open beginner planning preview')
     
     # dry-run
     dry_run_parser = subparsers.add_parser('dry-run', help='Dry run organization')
@@ -1005,6 +1008,8 @@ Examples:
         cmd_score(args, config)
     elif args.command == 'storage':
         cmd_storage(args, config)
+    elif args.command == 'gui':
+        launch_gui(config)
     elif args.command == 'dry-run':
         cmd_dry_run(args, config)
     elif args.command == 'organize':

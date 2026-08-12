@@ -119,7 +119,7 @@
     ]
   },
   "ai_classification": {
-    "enabled": true,
+    "enabled": false,
     "model": "llava:latest",
     "timeout": 30,
     "categories": [
