@@ -5,10 +5,11 @@ import io
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from roy import cmd_execute
+from roy import cmd_execute, cmd_screenshot_undo
 from roy_pilot import (PilotExecutor, PilotJournal, PilotRecord,
                        format_pilot_block, missing_plan_sources,
-                       select_pilot_operations)
+                       SCREENSHOT_PREFIX, screenshot_summary, select_pilot_operations,
+                       select_screenshot_operations)
 from roy_plan import PlanOperation, ReviewPlan
 
 
@@ -76,6 +77,20 @@ class PilotCase(unittest.TestCase):
         selected = select_pilot_operations(ReviewPlan(operations))
         self.assertEqual(len(selected), 20)
         self.assertTrue(all(op.category == 'Screenshots' and op.decision == 'approved' for op in selected))
+        self.assertEqual(len(select_screenshot_operations(ReviewPlan(operations))), 22)
+
+    def test_screenshot_summary_lists_all_roots_and_destination_tree(self):
+        desktop = self.operation('summary-desktop.png')
+        downloads = self.operation('summary-downloads.png',
+                                   source=self.home / 'Downloads/summary-downloads.png')
+        rendered = screenshot_summary([desktop, downloads], self.home)
+        self.assertIn('Screenshots approved: 2', rendered)
+        self.assertRegex(rendered, r'Desktop\s+1')
+        self.assertRegex(rendered, r'Downloads\s+1')
+        self.assertRegex(rendered, r'Documents\s+0')
+        self.assertRegex(rendered, r'Pictures\s+0')
+        self.assertRegex(rendered, r'Movies\s+0')
+        self.assertIn('Pictures/\n└── Screenshots/', rendered)
 
     def test_missing_plan_sources_checks_entire_plan(self):
         present = self.operation('present.png')
@@ -267,6 +282,83 @@ class PilotCase(unittest.TestCase):
         self.assertEqual(recovery['undone'], 1)
         self.assertTrue(pathlib.Path(op.source).exists())
         self.assertTrue(self.executor.verify_last()['consistent'])
+
+    def test_multi_hundred_screenshot_batch_one_identity_and_complete_undo(self):
+        operations = [self.operation(f'Screenshot bulk {number}.png') for number in range(305)]
+        progress = []
+        result = self.executor.execute_screenshots(
+            operations, 'EXECUTE SCREENSHOTS', progress.append)
+        self.assertEqual(result['executed'], 305)
+        self.assertEqual(result['blocked'], [])
+        self.assertTrue(result['batch_id'].startswith(SCREENSHOT_PREFIX))
+        executed_batches = {record.batch_id for record in self.executor.journal.records()
+                            if record.event == 'executed'}
+        self.assertEqual(len(executed_batches), 4)
+        self.assertEqual(len(result['batches']), 4)
+        self.assertEqual([batch['executed'] for batch in result['batches']], [100, 100, 100, 5])
+        self.assertTrue(all(batch['batch_id'].startswith(result['run_id'] + '-batch-')
+                            for batch in result['batches']))
+        self.assertEqual([item['remaining'] for item in progress], [205, 105, 5, 0])
+        self.assertEqual(self.executor.verify_last()['moved'], 305)
+        history = self.executor.history()
+        self.assertEqual(history[0]['run_id'], result['run_id'])
+        self.assertEqual(history[0]['batches'], 4)
+        self.assertTrue(history[0]['verified'])
+        self.assertTrue(history[0]['undo_available'])
+        undo = self.executor.undo_screenshot_run(result['run_id'])
+        self.assertEqual(undo['undone'], 305)
+        self.assertEqual(len(undo['batches']), 4)
+        self.assertTrue(all(pathlib.Path(operation.source).exists() for operation in operations))
+        self.assertFalse(self.executor.history()[0]['undo_available'])
+
+    def test_interrupted_screenshot_batch_is_recoverable(self):
+        operations = [self.operation(f'Screenshot interrupted {number}.png') for number in range(205)]
+        real_move = pathlib.Path.rename
+        calls = 0
+
+        def interrupt_after_move(source, destination):
+            nonlocal calls
+            calls += 1
+            real_move(pathlib.Path(source), pathlib.Path(destination))
+            if calls == 151:
+                raise KeyboardInterrupt()
+
+        with patch('roy_pilot.shutil.move', side_effect=interrupt_after_move):
+            with self.assertRaises(KeyboardInterrupt):
+                self.executor.execute_screenshots(operations, 'EXECUTE SCREENSHOTS')
+        verification = self.executor.verify_last()
+        self.assertFalse(verification['consistent'])
+        self.assertTrue(any('interrupted_after_move' in value
+                            for value in verification['anomalies']))
+        recovery = self.executor.undo_screenshot_run()
+        self.assertEqual(recovery['undone'], 151)
+        self.assertTrue(self.executor.verify_last()['consistent'])
+
+    def test_cli_screenshot_undo_requires_exact_confirmation_and_undoes_run(self):
+        operations = [self.operation(f'Screenshot cli undo {number}.png') for number in range(105)]
+        self.executor.execute_screenshots(operations, 'EXECUTE SCREENSHOTS')
+        with patch('roy._pilot_executor', return_value=self.executor), \
+                patch('builtins.input', return_value='yes'), redirect_stdout(io.StringIO()):
+            cmd_screenshot_undo(self.config)
+        self.assertFalse(pathlib.Path(operations[0].source).exists())
+        with patch('roy._pilot_executor', return_value=self.executor), \
+                patch('builtins.input', return_value='UNDO SCREENSHOTS'), \
+                redirect_stdout(io.StringIO()):
+            cmd_screenshot_undo(self.config)
+        self.assertTrue(all(pathlib.Path(operation.source).exists() for operation in operations))
+
+    def test_screenshot_batch_failure_stops_later_batches(self):
+        operations = [self.operation(f'Screenshot stop {number:03d}.png') for number in range(205)]
+        collision = pathlib.Path(operations[120].destination)
+        collision.parent.mkdir(parents=True, exist_ok=True)
+        collision.write_bytes(b'collision')
+        result = self.executor.execute_screenshots(operations, 'EXECUTE SCREENSHOTS')
+        self.assertEqual(len(result['batches']), 2)
+        self.assertEqual(result['batches'][0]['executed'], 100)
+        self.assertEqual(result['batches'][1]['executed'], 20)
+        self.assertEqual(len(result['blocked']), 1)
+        self.assertTrue(all(pathlib.Path(operation.source).exists()
+                            for operation in operations[121:]))
 
 
 if __name__ == '__main__':

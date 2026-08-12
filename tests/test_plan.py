@@ -143,6 +143,23 @@ class TestReviewPlan(unittest.TestCase):
         self.assertIn('Code                     10', value)
         self.assertIn('execution is disabled', value)
 
+    def test_final_summary_shows_screenshot_sources_and_destination(self):
+        operations = [
+            PlanOperation('/Desktop/a.png', '/Pictures/Screenshots/2026/2026-01/a.png',
+                          'Screenshots', 1, 'test', 'approved', source_folder='Desktop'),
+            PlanOperation('/Downloads/b.png', '/Pictures/Screenshots/2026/2026-01/b.png',
+                          'Screenshots', 1, 'test', 'approved', source_folder='Downloads'),
+        ]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_plan_summary(ReviewPlan(operations))
+        value = output.getvalue()
+        self.assertIn('Screenshots approved: 2', value)
+        self.assertRegex(value, r'Desktop\s+1')
+        self.assertRegex(value, r'Downloads\s+1')
+        self.assertRegex(value, r'Documents\s+0')
+        self.assertIn('Pictures/\n└── Screenshots/', value)
+
     def test_needs_review_filters_and_never_plans_moves(self):
         files = [
             item(pathlib.Path('/tmp/Desktop/report.xyz'), Category.NEEDS_REVIEW, size=100),

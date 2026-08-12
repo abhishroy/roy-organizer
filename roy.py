@@ -29,7 +29,9 @@ from roy_tui import launch as launch_tui
 from roy_gui import launch as launch_gui
 from roy_demo import run_demo
 from roy_pilot import (PilotExecutor, format_pilot_block, missing_plan_sources,
-                       pilot_summary, select_pilot_operations)
+                       PILOT_PREFIX, SCREENSHOT_PREFIX, pilot_summary,
+                       screenshot_summary, select_pilot_operations,
+                       select_screenshot_operations)
 from roy_doctor import print_diagnostics
 
 
@@ -132,6 +134,18 @@ def print_plan_summary(plan: ReviewPlan):
         print("\nBy category:")
         for category, count in sorted(summary['by_category'].items()):
             print(f"  {category:<20} {count:>7,}")
+    approved_screenshots = [operation for operation in plan.operations
+                            if operation.decision == 'approved'
+                            and operation.category == Category.SCREENSHOTS.value]
+    if approved_screenshots:
+        source_counts = {name: 0 for name in DEFAULT_SOURCE_NAMES}
+        for operation in approved_screenshots:
+            source_counts[operation.source_folder] = source_counts.get(
+                operation.source_folder, 0) + 1
+        print(f"\nScreenshots approved: {len(approved_screenshots):,}\n")
+        for source in DEFAULT_SOURCE_NAMES:
+            print(f"  {source:<12} {source_counts[source]:>7,}")
+        print("\nDestination:\n\nPictures/\n└── Screenshots/")
     print("\nProtected:")
     print(f"  Code                {summary['protected_code']:>7,}")
     print(f"  Work Review         {summary['protected_work']:>7,}")
@@ -674,9 +688,11 @@ def _pilot_executor(config: dict) -> PilotExecutor:
 
 
 def cmd_execute(args, config: dict):
-    """Run only the separately gated screenshot pilot."""
-    if not args.pilot:
-        print("Unrestricted execution is disabled. Use --pilot for the controlled screenshot pilot.")
+    """Run only explicitly gated screenshot execution modes."""
+    pilot_mode = getattr(args, 'pilot', False)
+    screenshot_mode = getattr(args, 'screenshots', False)
+    if not pilot_mode and not screenshot_mode:
+        print("Unrestricted execution is disabled. Use --pilot or --screenshots.")
         return
     plan_path = pathlib.Path(config.get('review', {}).get('plan_file', 'data/current_plan.json'))
     if not plan_path.exists():
@@ -696,13 +712,31 @@ def cmd_execute(args, config: dict):
             print(f"  ... and {len(missing_sources) - 20:,} more")
         print(f"\nThe stale plan was retained for inspection: {plan_path}")
         return
-    operations = select_pilot_operations(plan)
-    print(pilot_summary(operations))
+    operations = (select_pilot_operations(plan) if pilot_mode
+                  else select_screenshot_operations(plan))
+    print(pilot_summary(operations) if pilot_mode else screenshot_summary(operations))
     if not operations:
         print("\nNo approved screenshot operations are eligible.")
         return
-    confirmation = input("\nType exactly EXECUTE PILOT to continue: ")
-    result = _pilot_executor(config).execute(operations, confirmation)
+    required = "EXECUTE PILOT" if pilot_mode else "EXECUTE SCREENSHOTS"
+    confirmation = input(f"\nType exactly {required} to continue: ")
+    executor = _pilot_executor(config)
+    def show_progress(progress):
+        estimate = (f"{progress['estimate']:.1f} s" if progress['estimate'] is not None
+                    else 'calculating')
+        print(f"\nBatch {progress['batch']}/{progress['batches']}\n")
+        print(f"Moved: {progress['moved']}")
+        print(f"Blocked: {progress['blocked']}")
+        print(f"Elapsed: {progress['elapsed']:.1f} s")
+        print(f"Remaining: {progress['remaining']:,} files")
+        print(f"Estimated: {estimate}")
+
+    result = (executor.execute(operations, confirmation) if pilot_mode
+              else executor.execute_screenshots(operations, confirmation, show_progress))
+    if screenshot_mode:
+        print(f"\nRun: {result['run_id']}")
+        if result['blocked']:
+            print("\nExecution stopped. No later screenshot batches were processed.")
     print(f"\nPilot batch: {result['batch_id'] or 'not started'}")
     print(f"Moved: {result['executed']}")
     print(f"Blocked: {len(result['blocked'])}")
@@ -725,12 +759,45 @@ def cmd_verify(args, config: dict):
 
 
 def cmd_pilot_undo(config: dict):
-    result = _pilot_executor(config).undo_last()
+    result = _pilot_executor(config).undo_last((PILOT_PREFIX,))
     print(f"Pilot batch: {result['batch_id'] or 'none'}")
     print(f"Restored: {result['undone']}")
     print(f"Blocked: {len(result['blocked'])}")
     for source, reason in result['blocked']:
         print(f"  BLOCKED {source}: {reason}")
+
+
+def cmd_screenshot_undo(config: dict):
+    executor = _pilot_executor(config)
+    run_id = executor.journal.last_active_run((SCREENSHOT_PREFIX,))
+    if not run_id:
+        print("No active screenshot run is available to undo.")
+        return
+    summary = executor.screenshot_run_summary(run_id)
+    print(f"UNDO SCREENSHOT RUN\n\nRun: {run_id}\n"
+          f"Moved: {summary['moved']:,}\nBatches: {summary['batches']:,}\n"
+          f"Verified: {'YES' if summary['verified'] else 'NO'}")
+    if input("\nType exactly UNDO SCREENSHOTS to continue: ") != 'UNDO SCREENSHOTS':
+        print("Undo cancelled.")
+        return
+    result = executor.undo_screenshot_run(run_id)
+    print(f"Screenshot run: {result['run_id'] or 'none'}")
+    print(f"Restored: {result['undone']}")
+    print(f"Blocked: {len(result['blocked'])}")
+    for source, reason in result['blocked']:
+        print(f"  BLOCKED {source}: {reason}")
+
+
+def cmd_history(args, config: dict):
+    runs = _pilot_executor(config).history()
+    if not runs:
+        print("No screenshot runs recorded.")
+        return
+    for index, run in enumerate(runs, 1):
+        print(f"Run {index}\n\nID: {run['run_id']}\nType: {run['type']}\n"
+              f"Date: {run['timestamp'][:19] or 'unknown'}\nMoved: {run['moved']:,}\n"
+              f"Batches: {run['batches']:,}\nVerified: {'YES' if run['verified'] else 'NO'}\n"
+              f"Undo available: {'YES' if run['undo_available'] else 'NO'}\n")
 
 
 def cmd_status(args, config: dict):
@@ -1032,11 +1099,14 @@ Examples:
     # organize
     subparsers.add_parser('organize', help='Organize files')
 
-    execute_parser = subparsers.add_parser('execute', help='Controlled execution (pilot only)')
-    execute_parser.add_argument('--pilot', action='store_true', help='Run screenshot-only pilot')
+    execute_parser = subparsers.add_parser('execute', help='Controlled screenshot execution')
+    execute_modes = execute_parser.add_mutually_exclusive_group()
+    execute_modes.add_argument('--pilot', action='store_true', help='Run 20-file screenshot pilot')
+    execute_modes.add_argument('--screenshots', action='store_true', help='Run approved screenshot batch')
 
     verify_parser = subparsers.add_parser('verify', help='Verify pilot transaction state')
     verify_parser.add_argument('--last', action='store_true', help='Verify most recent pilot batch')
+    subparsers.add_parser('history', help='Show controlled screenshot run history')
     
     # screenshots
     ss_parser = subparsers.add_parser('screenshots', help='Organize screenshots')
@@ -1067,7 +1137,9 @@ Examples:
     undo_parser.add_argument('--last', type=int, help='Undo last N batches')
     undo_parser.add_argument('--batch', help='Undo specific batch ID')
     undo_parser.add_argument('--dry-run', action='store_true', help='Dry run')
-    undo_parser.add_argument('--pilot', action='store_true', help='Undo most recent pilot batch only')
+    undo_modes = undo_parser.add_mutually_exclusive_group()
+    undo_modes.add_argument('--pilot', action='store_true', help='Undo most recent pilot batch only')
+    undo_modes.add_argument('--screenshots', action='store_true', help='Undo most recent screenshot batch only')
     
     # status
     subparsers.add_parser('status', help='Show transaction status')
@@ -1121,6 +1193,8 @@ Examples:
         cmd_execute(args, config)
     elif args.command == 'verify':
         cmd_verify(args, config)
+    elif args.command == 'history':
+        cmd_history(args, config)
     elif args.command == 'screenshots':
         cmd_screenshots(args, config)
     elif args.command == 'downloads':
@@ -1134,6 +1208,8 @@ Examples:
     elif args.command == 'undo':
         if args.pilot:
             cmd_pilot_undo(config)
+        elif args.screenshots:
+            cmd_screenshot_undo(config)
         else:
             cmd_undo(args, config)
     elif args.command == 'status':

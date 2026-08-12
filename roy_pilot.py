@@ -6,18 +6,22 @@ import json
 import os
 import pathlib
 import shutil
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
 
-from roy_plan import PlanOperation, ReviewPlan, source_folder
+from roy_plan import DEFAULT_SOURCE_NAMES, PlanOperation, ReviewPlan, source_folder
 from roy_safety import SafetyChecker
 from roy_validate import ExecutionValidator
 
 
 PILOT_LIMIT = 20
 PILOT_PREFIX = "pilot-"
+SCREENSHOT_PREFIX = "screenshots-"
+SCREENSHOT_CHUNK_SIZE = 100
+CONTROLLED_PREFIXES = (PILOT_PREFIX, SCREENSHOT_PREFIX)
 
 
 @dataclass
@@ -62,17 +66,64 @@ class PilotJournal:
                 raise ValueError(f"corrupt_pilot_log_line_{number}") from error
         return result
 
-    def last_batch(self) -> Optional[str]:
+    def last_batch(self, prefixes: tuple[str, ...] = CONTROLLED_PREFIXES) -> Optional[str]:
         for record in reversed(self.records()):
-            if record.batch_id.startswith(PILOT_PREFIX):
+            if record.batch_id.startswith(prefixes):
                 return record.batch_id
         return None
+
+    def last_active_batch(self, prefixes: tuple[str, ...] = CONTROLLED_PREFIXES) -> Optional[str]:
+        """Return the newest batch with a move that has not been undone."""
+        records = self.records()
+        batches = []
+        for record in records:
+            if record.batch_id.startswith(prefixes) and record.batch_id not in batches:
+                batches.append(record.batch_id)
+        for batch_id in reversed(batches):
+            moved = set()
+            for record in records:
+                if record.batch_id != batch_id or record.operation != 'move':
+                    continue
+                if record.event == 'executed':
+                    moved.add(record.source)
+                elif (record.event == 'prepared'
+                      and pathlib.Path(record.destination).exists()
+                      and not pathlib.Path(record.source).exists()):
+                    moved.add(record.source)
+            undone = {record.source for record in records
+                      if record.batch_id == batch_id and record.event == 'undone'}
+            if moved - undone:
+                return batch_id
+        return None
+
+    @staticmethod
+    def run_id(batch_id: str) -> str:
+        return batch_id.rsplit('-batch-', 1)[0] if '-batch-' in batch_id else batch_id
+
+    def run_batch_ids(self, run_id: str) -> list[str]:
+        return sorted({record.batch_id for record in self.records()
+                       if self.run_id(record.batch_id) == run_id})
+
+    def last_run(self, prefixes: tuple[str, ...] = CONTROLLED_PREFIXES) -> Optional[str]:
+        batch_id = self.last_batch(prefixes)
+        return self.run_id(batch_id) if batch_id else None
+
+    def last_active_run(self, prefixes: tuple[str, ...]) -> Optional[str]:
+        batch_id = self.last_active_batch(prefixes)
+        return self.run_id(batch_id) if batch_id else None
 
 
 def select_pilot_operations(plan: ReviewPlan) -> list[PlanOperation]:
     """Select at most 20 approved screenshots, never any other category."""
     return [operation for operation in plan.operations
             if operation.decision == "approved" and operation.category == "Screenshots"][:PILOT_LIMIT]
+
+
+def select_screenshot_operations(plan: ReviewPlan) -> list[PlanOperation]:
+    """Select every approved screenshot and no operation from another category."""
+    selected = [operation for operation in plan.operations
+                if operation.decision == "approved" and operation.category == "Screenshots"]
+    return sorted(selected, key=lambda operation: (operation.source, operation.destination or ''))
 
 
 def missing_plan_sources(plan: ReviewPlan) -> list[str]:
@@ -175,42 +226,95 @@ class PilotExecutor:
         return self._validator().destination_diagnostics(destination)
 
     def execute(self, operations: Iterable[PlanOperation], confirmation: str) -> dict:
-        selected = list(operations)[:PILOT_LIMIT]
-        if confirmation != "EXECUTE PILOT":
-            return {"batch_id": None, "executed": 0, "blocked": [("pilot", "exact_confirmation_required")]}
-        batch_id = PILOT_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:8]
+        return self._execute_batch(list(operations)[:PILOT_LIMIT], confirmation,
+                                   "EXECUTE PILOT", PILOT_PREFIX, PILOT_LIMIT)
+
+    def execute_screenshots(self, operations: Iterable[PlanOperation], confirmation: str,
+                            progress: Optional[Callable[[dict], None]] = None) -> dict:
+        """Execute deterministic, independently recoverable screenshot batches."""
+        selected = sorted(list(operations), key=lambda operation: (operation.source,
+                                                                    operation.destination or ''))
+        if confirmation != "EXECUTE SCREENSHOTS":
+            return {"batch_id": None, "executed": 0,
+                    "blocked": [("screenshots", "exact_confirmation_required")],
+                    "batches": []}
+        run_id = SCREENSHOT_PREFIX + datetime.now(timezone.utc).strftime(
+            "%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:8]
+        batch_results = []
+        total_executed = 0
+        all_blocked = []
+        started = time.monotonic()
+        total_batches = (len(selected) + SCREENSHOT_CHUNK_SIZE - 1) // SCREENSHOT_CHUNK_SIZE
+        for offset in range(0, len(selected), SCREENSHOT_CHUNK_SIZE):
+            number = offset // SCREENSHOT_CHUNK_SIZE + 1
+            batch_id = f"{run_id}-batch-{number:04d}"
+            result = self._execute_batch(
+                selected[offset:offset + SCREENSHOT_CHUNK_SIZE], confirmation,
+                "EXECUTE SCREENSHOTS", SCREENSHOT_PREFIX, SCREENSHOT_CHUNK_SIZE,
+                batch_id=batch_id, stop_on_block=True)
+            batch_results.append(result)
+            total_executed += result['executed']
+            all_blocked.extend(result['blocked'])
+            processed = total_executed + len(all_blocked)
+            elapsed = time.monotonic() - started
+            remaining = max(0, len(selected) - processed)
+            estimate = (elapsed / processed * remaining) if processed else None
+            if progress:
+                progress({'run_id': run_id, 'batch': number, 'batches': total_batches,
+                          'moved': result['executed'], 'blocked': len(result['blocked']),
+                          'elapsed': elapsed, 'remaining': remaining, 'estimate': estimate})
+            if result['blocked']:
+                break
+        return {"run_id": run_id, "batch_id": batch_results[-1]['batch_id'] if batch_results else None,
+                "executed": total_executed, "blocked": all_blocked,
+                "batches": batch_results}
+
+    def _execute_batch(self, selected: list[PlanOperation], confirmation: str,
+                       required_confirmation: str, batch_prefix: str,
+                       chunk_size: int, *, batch_id: Optional[str] = None,
+                       stop_on_block: bool = False) -> dict:
+        if confirmation != required_confirmation:
+            return {"batch_id": None, "executed": 0,
+                    "blocked": [("screenshots", "exact_confirmation_required")]}
+        batch_id = batch_id or (batch_prefix + datetime.now(timezone.utc).strftime(
+            "%Y%m%dT%H%M%S-") + uuid.uuid4().hex[:8])
         executed = 0
         blocked = []
-        for operation in selected:
-            validation = self.validate(operation)  # fresh lsof snapshot and full validator per move
-            if validation != "SAFE_TO_EXECUTE":
-                blocked.append((operation.source, validation.removeprefix("BLOCKED reason=")))
-                continue
-            source = pathlib.Path(operation.source)
-            destination = pathlib.Path(operation.destination or "")
-            prepared = PilotRecord("prepared", batch_id, _now(), str(source), str(destination),
-                                   "move", operation.size, operation.mtime, operation.reason, validation)
-            self.journal.append(prepared)
-            try:
-                missing = []
-                current = destination.parent
-                while current != self.destination_root and not current.exists():
-                    missing.append(current)
-                    current = current.parent
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                for directory in reversed(missing):
-                    self.journal.append(PilotRecord(
-                        "created_directory", batch_id, _now(), "", str(directory),
-                        "create_directory", 0, 0.0, "Validated pilot destination parent",
-                        "SAFE_TO_CREATE_DIRECTORY"))
-                shutil.move(str(source), str(destination))
-            except OSError as error:
-                blocked.append((operation.source, f"filesystem_error_{type(error).__name__}"))
-                continue
-            self.journal.append(PilotRecord("executed", batch_id, _now(), str(source),
-                                           str(destination), "move", operation.size,
-                                           operation.mtime, operation.reason, validation))
-            executed += 1
+        for chunk_start in range(0, len(selected), chunk_size):
+            for operation in selected[chunk_start:chunk_start + chunk_size]:
+                validation = self.validate(operation)  # fresh lsof snapshot and full validator per move
+                if validation != "SAFE_TO_EXECUTE":
+                    blocked.append((operation.source, validation.removeprefix("BLOCKED reason=")))
+                    if stop_on_block:
+                        return {"batch_id": batch_id, "executed": executed, "blocked": blocked}
+                    continue
+                source = pathlib.Path(operation.source)
+                destination = pathlib.Path(operation.destination or "")
+                prepared = PilotRecord("prepared", batch_id, _now(), str(source), str(destination),
+                                       "move", operation.size, operation.mtime, operation.reason, validation)
+                self.journal.append(prepared)
+                try:
+                    missing = []
+                    current = destination.parent
+                    while current != self.destination_root and not current.exists():
+                        missing.append(current)
+                        current = current.parent
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    for directory in reversed(missing):
+                        self.journal.append(PilotRecord(
+                            "created_directory", batch_id, _now(), "", str(directory),
+                            "create_directory", 0, 0.0, "Validated screenshot destination parent",
+                            "SAFE_TO_CREATE_DIRECTORY"))
+                    shutil.move(str(source), str(destination))
+                except OSError as error:
+                    blocked.append((operation.source, f"filesystem_error_{type(error).__name__}"))
+                    if stop_on_block:
+                        return {"batch_id": batch_id, "executed": executed, "blocked": blocked}
+                    continue
+                self.journal.append(PilotRecord("executed", batch_id, _now(), str(source),
+                                               str(destination), "move", operation.size,
+                                               operation.mtime, operation.reason, validation))
+                executed += 1
         return {"batch_id": batch_id, "executed": executed, "blocked": blocked}
 
     def _batch_state(self, batch_id: str) -> dict[str, list[PilotRecord]]:
@@ -229,13 +333,17 @@ class PilotExecutor:
         return sorted((pathlib.Path(value) for value in created - removed),
                       key=lambda value: len(value.parts), reverse=True)
 
-    def verify_last(self) -> dict:
-        batch_id = self.journal.last_batch()
-        if not batch_id:
-            return {"batch_id": None, "consistent": True, "moved": 0, "anomalies": []}
+    def verify_run(self, run_id: str) -> dict:
+        batch_ids = self.journal.run_batch_ids(run_id)
+        if not batch_ids:
+            return {"run_id": run_id, "batch_id": None, "consistent": True,
+                    "moved": 0, "anomalies": []}
         moved = 0
         anomalies = []
-        for source_value, records in self._batch_state(batch_id).items():
+        state = {}
+        for related_batch in batch_ids:
+            state.update(self._batch_state(related_batch))
+        for source_value, records in state.items():
             source = pathlib.Path(source_value)
             destination = pathlib.Path(records[-1].destination)
             events = {record.event for record in records}
@@ -251,13 +359,23 @@ class PilotExecutor:
                     anomalies.append(f"executed_but_source_present:{source}")
             else:
                 anomalies.append(f"filesystem_state_ambiguous:{source}")
-        return {"batch_id": batch_id, "consistent": not anomalies,
+        return {"run_id": run_id, "batch_id": batch_ids[-1], "consistent": not anomalies,
                 "moved": moved, "anomalies": anomalies}
 
-    def undo_last(self) -> dict:
-        batch_id = self.journal.last_batch()
+    def verify_last(self) -> dict:
+        run_id = self.journal.last_run()
+        if not run_id:
+            return {"run_id": None, "batch_id": None, "consistent": True,
+                    "moved": 0, "anomalies": []}
+        return self.verify_run(run_id)
+
+    def undo_last(self, prefixes: tuple[str, ...] = CONTROLLED_PREFIXES) -> dict:
+        batch_id = self.journal.last_active_batch(prefixes)
         if not batch_id:
             return {"batch_id": None, "undone": 0, "blocked": []}
+        return self._undo_batch(batch_id)
+
+    def _undo_batch(self, batch_id: str) -> dict:
         undone = 0
         blocked = []
         state = self._batch_state(batch_id)
@@ -304,6 +422,48 @@ class PilotExecutor:
                 "remove_directory", 0, 0.0, "Undo ROY-created empty directory",
                 "SAFE_TO_REMOVE_EMPTY_DIRECTORY"))
         return {"batch_id": batch_id, "undone": undone, "blocked": blocked}
+
+    def screenshot_run_summary(self, run_id: str) -> dict:
+        records = self.journal.records()
+        batch_ids = self.journal.run_batch_ids(run_id)
+        executed = [record for record in records if record.batch_id in batch_ids
+                    and record.event == 'executed']
+        undone = {record.source for record in records if record.batch_id in batch_ids
+                  and record.event == 'undone'}
+        verification = self.verify_run(run_id)
+        return {'run_id': run_id, 'type': 'Screenshots',
+                'timestamp': min((record.timestamp for record in executed), default=''),
+                'moved': len(executed), 'batches': len(batch_ids),
+                'verified': verification['consistent'],
+                'undo_available': any(record.source not in undone for record in executed)}
+
+    def undo_screenshot_run(self, run_id: Optional[str] = None) -> dict:
+        run_id = run_id or self.journal.last_active_run((SCREENSHOT_PREFIX,))
+        if not run_id:
+            return {'run_id': None, 'undone': 0, 'blocked': [], 'batches': []}
+        results = []
+        undone = 0
+        blocked = []
+        for batch_id in reversed(self.journal.run_batch_ids(run_id)):
+            active = self.journal.last_active_batch((batch_id,))
+            if not active:
+                continue
+            result = self._undo_batch(batch_id)
+            results.append(result)
+            undone += result['undone']
+            blocked.extend(result['blocked'])
+            if result['blocked']:
+                break
+        return {'run_id': run_id, 'undone': undone, 'blocked': blocked,
+                'batches': results}
+
+    def history(self) -> list[dict]:
+        run_ids = []
+        for record in self.journal.records():
+            run_id = self.journal.run_id(record.batch_id)
+            if run_id.startswith(SCREENSHOT_PREFIX) and run_id not in run_ids:
+                run_ids.append(run_id)
+        return [self.screenshot_run_summary(run_id) for run_id in reversed(run_ids)]
 
 
 PILOT_BLOCK_EXPLANATIONS = {
@@ -352,4 +512,21 @@ def pilot_summary(operations: Iterable[PlanOperation], home: Optional[pathlib.Pa
             f"Total size: {total:,} bytes\n"
             f"Source roots represented: {', '.join(roots) or 'None'}\n"
             f"Destination root:\n{root}/\n\n"
+            "Deletes: 0\nOverwrites: 0\nUndo logging: ENABLED")
+
+
+def screenshot_summary(operations: Iterable[PlanOperation], home: Optional[pathlib.Path] = None) -> str:
+    selected = list(operations)
+    counts = {name: 0 for name in DEFAULT_SOURCE_NAMES}
+    for operation in selected:
+        folder = source_folder(pathlib.Path(operation.source), home)
+        counts[folder] = counts.get(folder, 0) + 1
+    total = sum(operation.size for operation in selected)
+    root = (home or pathlib.Path.home()) / "Pictures" / "Screenshots"
+    source_lines = '\n'.join(f"{name:<12}{counts[name]:>7,}" for name in DEFAULT_SOURCE_NAMES)
+    return ("REAL SCREENSHOT ORGANIZATION\n\n"
+            f"Screenshots approved: {len(selected):,}\n\n{source_lines}\n\n"
+            f"Total size: {total:,} bytes\n\nDestination:\n\n"
+            "Pictures/\n└── Screenshots/\n"
+            f"({root}/)\n\nBatch size: {SCREENSHOT_CHUNK_SIZE}\n"
             "Deletes: 0\nOverwrites: 0\nUndo logging: ENABLED")
