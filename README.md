@@ -1,7 +1,7 @@
 # ROY Organizer
 
 > A private and safe Mac file organizer for humans, developers, and
-> everyone whose Desktop has quietly become a storage strategy.
+> everyone whose Desktop has quietly become as messy as my study table with screenshots and files everywhere.
 
 ROY helps you tidy files on your Mac without behaving like an overconfident robot
 intern. It looks first, explains what it found, asks what you want, and only acts
