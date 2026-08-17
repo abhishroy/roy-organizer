@@ -17,4 +17,4 @@ classifiers = ["Development Status :: 3 - Alpha", "Operating System :: MacOS"]
 roy = "roy:main"
 
 [tool.setuptools]
-py-modules = ["roy", "roy_ai", "roy_analytics", "roy_classify", "roy_config", "roy_demo", "roy_doctor", "roy_executor", "roy_gui", "roy_inspect", "roy_plan", "roy_safety", "roy_scan", "roy_transactions", "roy_tui", "roy_validate"]
+py-modules = ["roy", "roy_ai", "roy_alias_cleanup", "roy_analytics", "roy_classify", "roy_config", "roy_demo", "roy_doctor", "roy_executor", "roy_gui", "roy_inspect", "roy_plan", "roy_pilot", "roy_safety", "roy_scan", "roy_transactions", "roy_tui", "roy_validate"]

@@ -82,15 +82,129 @@ class ScreenshotAliasCleanup:
                  resolver: Callable[[pathlib.Path], Optional[pathlib.Path]] = resolve_finder_alias,
                  detector: Callable[[pathlib.Path], bool] = is_finder_alias,
                  safety: Optional[SafetyChecker] = None,
-                 journal_path: pathlib.Path = pathlib.Path('logs/alias-cleanup.jsonl')):
+                 journal_path: Optional[pathlib.Path] = None):
         self.config = config
         self.home = (home or pathlib.Path.home()).resolve()
         self.screenshot_root = (self.home / 'Pictures' / 'Screenshots').resolve()
         self.resolver = resolver
         self.detector = detector
         self.safety = safety or SafetyChecker(config)
-        self.journal_path = journal_path
+        configured_log = config.get('logging', {}).get(
+            'alias_cleanup_log', 'logs/alias-cleanup.jsonl')
+        self.journal_path = pathlib.Path(journal_path or configured_log)
         self.classifier = Classifier(config)
+
+    def _journal_records(self) -> list[dict]:
+        if not self.journal_path.exists():
+            return []
+        records = []
+        for number, line in enumerate(self.journal_path.read_text().splitlines(), 1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f'corrupt_alias_cleanup_journal_line_{number}') from error
+            if not isinstance(record, dict) or not {'event', 'run_id', 'source', 'quarantine'} <= record.keys():
+                raise ValueError(f'corrupt_alias_cleanup_journal_line_{number}')
+            records.append(record)
+        return records
+
+    def last_active_run(self) -> Optional[str]:
+        records = self._journal_records()
+        restored = {(item['run_id'], item['source']) for item in records
+                    if item['event'] == 'alias_restored'}
+        for item in reversed(records):
+            if (item['event'] == 'alias_quarantined' and
+                    (item['run_id'], item['source']) not in restored):
+                return item['run_id']
+        return None
+
+    def undo_summary(self, run_id: Optional[str] = None) -> dict:
+        run_id = run_id or self.last_active_run()
+        if not run_id:
+            return {'run_id': None, 'items': []}
+        records = self._journal_records()
+        restored = {item['source'] for item in records
+                    if item['run_id'] == run_id and item['event'] == 'alias_restored'}
+        items = [item for item in records if item['run_id'] == run_id
+                 and item['event'] == 'alias_quarantined' and item['source'] not in restored]
+        return {'run_id': run_id, 'items': items}
+
+    def restore_last(self, confirmation: str) -> dict:
+        """Restore the latest alias cleanup run without overwriting user files."""
+        summary = self.undo_summary()
+        if confirmation != 'RESTORE SCREENSHOT ALIASES':
+            return {'run_id': summary['run_id'], 'restored': 0,
+                    'blocked': [('confirmation', 'exact_confirmation_required')]}
+        run_id = summary['run_id']
+        if not run_id:
+            return {'run_id': None, 'restored': 0, 'blocked': []}
+        trash_root = (self.home / '.Trash' / 'ROY Organizer' / 'screenshot-aliases').resolve()
+        scan_roots = [pathlib.Path(str(value).replace('~', str(self.home), 1)).resolve()
+                      for value in self.config.get('scan_paths', [])]
+        restored, blocked = 0, []
+        for item in reversed(summary['items']):
+            source = pathlib.Path(item['source'])
+            quarantine = pathlib.Path(item['quarantine'])
+            lexical_source = source.absolute()
+            lexical_roots = [pathlib.Path(str(value).replace('~', str(self.home), 1)).absolute()
+                             for value in self.config.get('scan_paths', [])]
+            matching_root = next((root for root in lexical_roots
+                                  if lexical_source.is_relative_to(root)), None)
+            symlink_parent = False
+            if matching_root is not None:
+                current = matching_root
+                for component in lexical_source.parent.relative_to(matching_root).parts:
+                    current = current / component
+                    if current.is_symlink():
+                        symlink_parent = True
+                        break
+            try:
+                in_trash = quarantine.resolve().is_relative_to(trash_root)
+                in_scan_root = any(source.resolve(strict=False).is_relative_to(root)
+                                   for root in scan_roots)
+            except (OSError, ValueError):
+                in_trash = in_scan_root = False
+            if not in_trash:
+                blocked.append((str(source), 'quarantine_path_unsafe'))
+                continue
+            if not quarantine.exists() or not quarantine.is_file() or quarantine.is_symlink():
+                blocked.append((str(source), 'quarantined_alias_missing_or_invalid'))
+                continue
+            if source.exists() or source.is_symlink():
+                blocked.append((str(source), 'original_source_reappeared'))
+                continue
+            if (matching_root is None or symlink_parent or not in_scan_root or
+                    not source.parent.exists() or not source.parent.is_dir()):
+                blocked.append((str(source), 'original_parent_missing_or_outside_scan_roots'))
+                continue
+            parent = source.parent
+            protected = self.safety.is_protected(parent)
+            if (not protected.safe or self.safety.is_in_git_repo(parent) or
+                    self.safety.is_in_software_project(parent) or
+                    self.safety.has_work_terms(parent) or
+                    self.safety.is_developer_config(parent) or
+                    self.safety.is_company_security_path(parent)):
+                blocked.append((str(source), 'original_parent_now_protected'))
+                continue
+            try:
+                shutil.move(str(quarantine), str(source))
+            except OSError as error:
+                blocked.append((str(source), f'filesystem_error_{type(error).__name__}'))
+                continue
+            record = {'event': 'alias_restored', 'run_id': run_id,
+                      'timestamp': datetime.now(timezone.utc).isoformat(),
+                      'source': str(source), 'quarantine': str(quarantine),
+                      'status': item.get('status', ''), 'reason': 'Alias cleanup undo'}
+            with self.journal_path.open('a') as handle:
+                handle.write(json.dumps(record, sort_keys=True) + '\n')
+                handle.flush()
+            restored += 1
+        run_root = trash_root / run_id
+        try:
+            run_root.rmdir()
+        except OSError:
+            pass
+        return {'run_id': run_id, 'restored': restored, 'blocked': blocked}
 
     def discover(self) -> list[AliasCandidate]:
         if self.config.get('safety', {}).get('skip_open_files', True):

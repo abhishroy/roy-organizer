@@ -1,74 +1,19 @@
 # ROY Organizer
 
-ROY Organizer is a safety-first, local macOS file organizer. It scans configured
-folders recursively, builds explainable plans, lets you review every proposed
-change, validates files again immediately before execution, records each move,
-verifies the result, and supports undo.
+> A privacy-first, safety-first Mac file organizer for humans, developers, and
+> everyone whose Desktop has quietly become a storage strategy.
 
-ROY is designed for personal, developer, and company-managed Macs. Normal broad
-execution remains disabled: real execution is limited to explicit, approved
-screenshot workflows.
+ROY helps you tidy files on your Mac without behaving like an overconfident robot
+intern. It looks first, explains what it found, asks what you want, and only acts
+after you approve the plan.
 
-## ✨ Features
-
-- Recursive scanning across Desktop, Downloads, Documents, Pictures, and Movies
-- Rule-based classification with optional local AI suggestions via Ollama
-- Safe, persistent planning workflow
-- Interactive review before execution
-- Protected Git repository and software-project detection
-- Company/work-data and developer-configuration protection
-- Duplicate candidate detection
-- Centralized screenshot organization by capture year and month
-- Deterministic, recoverable batch execution
-- Durable transaction journaling
-- Post-execution filesystem and journal verification
-- Collision-safe undo
-- Controlled 20-file pilot mode
-- Approved screenshot-only production execution
-
-Local AI is optional and disabled by default. ROY does not require cloud inference
-and does not upload filenames or file contents.
-
-## 🛡️ Safety Philosophy
-
-ROY never blindly moves files. Every real operation follows:
-
-```text
-Scan
-→ Review
-→ Validation
-→ Confirmation
-→ Execution
-→ Verification
-→ Undo (if needed)
-```
-
-Before execution, ROY rejects stale plans if any referenced source has disappeared.
-Every operation must already be explicitly approved and is validated again directly
-before movement. Validation checks source metadata, protected paths, repositories,
-work data, symlinks, open-file state, allowed destination roots, and collisions.
-
-ROY never overwrites an existing destination and screenshot modes never delete
-files. Successful moves and ROY-created directories are written to a durable local
-transaction journal. Verification compares journal state with original and expected
-paths. Undo refuses to overwrite a source path that has reappeared and removes only
-empty directories that ROY itself recorded creating.
-
-When a screenshot destination already exists, ROY compares stable SHA-256 hashes.
-Matching content is reported as `ALREADY_ORGANIZED_DUPLICATE` and left untouched;
-different content remains a collision. Screenshot-like Finder aliases are never
-deleted during normal organization. The separate cleanup command resolves them via
-local metadata and, after exact confirmation, moves only broken or redundant aliases
-to a journaled folder in the current user's Trash. ROY never empties Trash.
-
-## 📸 Screenshot Organization
-
-ROY gives screenshots a single organized home:
+Today, ROY’s real-file workflow is focused on **screenshots**. It can find them
+inside Desktop, Downloads, Documents, Pictures, and Movies—even in nested folders—
+and organize them into one clean home:
 
 ```text
 Pictures/
 └── Screenshots/
-    ├── 2023/
     ├── 2024/
     ├── 2025/
     └── 2026/
@@ -77,104 +22,328 @@ Pictures/
         └── ...
 ```
 
-Screenshots may originate anywhere beneath configured Desktop, Downloads,
-Documents, Pictures, or Movies roots. ROY detects them recursively and proposes a
-Year → Month destination based on the capture date.
+ROY is an **Early Preview for macOS**. It is intentionally cautious. That means
+you may occasionally hear, “Nope, I’m not touching that.” This is a feature.
 
-Production screenshot execution uses one Run ID with deterministic internal batches
-of up to 100 files. Each batch is journaled independently for interruption recovery,
-while verification, history, and undo present the operation as one user-facing run.
-If an operation is blocked, ROY leaves it untouched, records its reason in a local
-retry report, and continues validating later files. A retry never bypasses safety.
+## 👋 What does ROY actually do?
 
-## ⌨️ Current Commands
+Think of ROY as a careful file butler:
 
-Run commands from the repository virtual environment:
+1. **Scan** — ROY looks through the folders you allow.
+2. **Explain** — it tells you what each file appears to be and why.
+3. **Review** — you choose what should happen. Nothing is selected by default.
+4. **Validate** — ROY checks everything again just before a move.
+5. **Confirm** — important actions require an exact confirmation phrase.
+6. **Execute** — only approved, safe items are moved.
+7. **Verify** — ROY confirms that files arrived where expected.
+8. **Undo** — if needed, ROY can put a completed screenshot run back.
 
-```bash
-python roy.py scan                    # refresh local inventory
-python roy.py review                  # create or resume an approved plan
-python roy.py execute --pilot         # controlled maximum-20 screenshot pilot
-python roy.py execute --screenshots   # all approved screenshots in safe batches
-python roy.py execute --screenshots --retry-blocked  # retry only previously blocked files
-python roy.py cleanup --screenshot-aliases  # review eligible Finder aliases for Trash
-python roy.py verify --last           # verify the latest controlled run
-python roy.py undo --pilot            # undo the latest pilot batch
-python roy.py undo --screenshots      # preview and undo the latest screenshot run
-python roy.py history                 # show screenshot-run history
+In short:
+
+```text
+Scan → Explain → Review → Validate → Confirm → Move → Verify → Undo
 ```
 
-Advanced read-only commands include `report`, `protected`, `duplicates --report`,
-`score`, `storage`, `status`, and `doctor`. `organize` and legacy broad execution
-paths remain blocked while `planning_only=true`.
+No mystery cleanup. No surprise “where did my file go?” treasure hunt.
 
-## 🔄 Typical Workflow
+## ✨ What can it do today?
+
+- Find files recursively, including inside nested folders
+- Organize approved screenshots by year and month
+- Review a small 20-file pilot before doing a larger screenshot run
+- Process large screenshot plans in manageable batches
+- Continue past individually blocked files while keeping them untouched
+- Detect identical screenshot copies using strong SHA-256 content hashes
+- Never overwrite a different file with the same name
+- Protect Git repositories and software projects
+- Protect work/company files and developer configuration
+- Protect AWS, Kubernetes, SSH, Zsh, VS Code, Docker, Terraform, and Homebrew data
+- Detect duplicate candidates and repository ZIP files
+- Record every successful move in a local transaction journal
+- Verify completed screenshot runs
+- Undo screenshot runs safely
+- Review broken or redundant Finder aliases separately
+- Move explicitly approved screenshot aliases to Trash instead of deleting forever
+- Restore the latest screenshot-alias cleanup from Trash
+
+Optional local AI suggestions through Ollama exist, but they are **off by default**.
+ROY works without AI and does not send filenames or file contents to cloud services.
+
+## 🛡️ ROY’s house rules
+
+ROY never blindly moves files.
+
+- **No overwrite:** if a destination contains different data, ROY blocks the move.
+- **Same name is not enough:** identical files are confirmed by content hash.
+- **No automatic deletion:** ordinary screenshot organization deletes nothing.
+- **Protected means protected:** repositories, work data, developer settings, and
+  company security tooling stay out of automatic organization.
+- **Open files are treated carefully:** if ROY cannot reliably check whether files
+  are open, execution fails closed.
+- **Stale plans are rejected:** if files changed or disappeared after review, ROY
+  asks for a fresh plan.
+- **Everything important is journaled:** verification and undo use local records.
+
+ROY is deliberately the friend who asks, “Are you *sure*?” before helping you move
+the sofa through a narrow doorway.
+
+## 🚀 Install ROY on your Mac
+
+You need:
+
+- A Mac
+- Python 3.10 or newer
+- About five minutes
+- No `sudo`
+- No need to disable Gatekeeper, SIP, or any Mac security setting
+
+### Option A: download the ZIP — easiest for most people
+
+1. Open the [ROY Organizer GitHub page](https://github.com/abhishroy/roy-organizer).
+2. Click the green **Code** button.
+3. Click **Download ZIP**.
+4. Open the downloaded ZIP. macOS will create a folder named something like
+   `roy-organizer-master`.
+5. Open **Terminal**. You can find it with Spotlight: press `Command + Space`, type
+   `Terminal`, and press Return.
+6. Type `cd` followed by one space, then drag the ROY folder from Finder into the
+   Terminal window. Press Return. It will look similar to:
+
+   ```bash
+   cd ~/Downloads/roy-organizer-master
+   ```
+
+7. Run the installer:
+
+   ```bash
+   sh install.sh
+   ```
+
+8. Ask ROY to check its setup:
+
+   ```bash
+   .venv/bin/roy doctor
+   ```
+
+The installer creates a private Python environment inside the ROY folder. It does
+not edit your shell, PATH, global Python installation, or system files.
+
+### Option B: install with Git — for developers
 
 ```bash
-cd ~/Projects/roy-organizer
-source venv/bin/activate
-
-python roy.py scan
-python roy.py review
-python roy.py execute --screenshots
-# Type exactly: EXECUTE SCREENSHOTS
-
-python roy.py verify --last
-python roy.py history
+git clone https://github.com/abhishroy/roy-organizer.git
+cd roy-organizer
+sh install.sh
+.venv/bin/roy doctor
 ```
 
-If the verified result should be reverted:
+If `doctor` reports that Python is missing or too old, install a current Python from
+[python.org](https://www.python.org/downloads/macos/) and run `sh install.sh` again.
+
+## 🧭 Your first safe cleanup, step by step
+
+### Step 1: scan
 
 ```bash
-python roy.py undo --screenshots
-# Review the run, then type exactly: UNDO SCREENSHOTS
-python roy.py verify --last
+.venv/bin/roy scan
 ```
 
-Always generate a fresh scan and plan after files have moved or otherwise changed.
+Scanning is read-only. ROY looks, counts, and takes notes. It does not move files.
 
-## 🧱 Project Structure
+### Step 2: review
 
-- `roy.py` — CLI, review workflow, summaries, and command routing
-- `roy_scan.py` — recursive scanner, inventory statistics, and duplicate discovery
-- `roy_classify.py` — deterministic file classification and destination proposals
-- `roy_inspect.py` — local kubeconfig and repository-archive inspection
-- `roy_safety.py` — protected paths, projects, work data, and open-file detection
-- `roy_plan.py` — persistent review plans, decisions, filtering, and grouping
-- `roy_validate.py` — fail-closed execution-time validation
-- `roy_pilot.py` — controlled pilot and run-based screenshot execution, journal,
-  verification, history, and undo
-- `roy_transactions.py` — legacy transaction primitives for sandboxed workflows
-- `roy_executor.py` / `roy_demo.py` — temporary-directory execution and demo
-- `roy_tui.py` / `roy_gui.py` — terminal and planning GUI interfaces
-- `tests/` — unit, safety, planner, validator, and filesystem integration tests
+```bash
+.venv/bin/roy review
+```
 
-Generated plans, scan inventories, reports, and transaction logs stay local and are
-excluded from Git.
+Choose **Screenshots**. When ROY asks for a source, leave it blank to include all
+configured folders. Review the summary, approve only what you want, then save the
+plan.
+
+### Step 3: try the 20-file pilot
+
+```bash
+.venv/bin/roy execute --pilot
+```
+
+ROY shows the number of files, total size, source folders, destination, and safety
+summary. To proceed, type exactly:
+
+```text
+EXECUTE PILOT
+```
+
+Typing `y`, `yes`, or “go on then, Roy” will not work. Exact means exact.
+
+### Step 4: verify the result
+
+```bash
+.venv/bin/roy verify --last
+```
+
+Check that ROY reports a consistent transaction log and no anomalies.
+
+### Step 5: undo the pilot if you want
+
+```bash
+.venv/bin/roy undo --pilot
+```
+
+### Step 6: organize all approved screenshots
+
+Only do this after you are comfortable with the pilot:
+
+```bash
+.venv/bin/roy execute --screenshots
+```
+
+Type exactly:
+
+```text
+EXECUTE SCREENSHOTS
+```
+
+ROY processes the plan in batches. A blocked item stays where it is; later safe
+items can continue. Blocked items are written to a local retry list.
+
+Afterward:
+
+```bash
+.venv/bin/roy verify --last
+.venv/bin/roy history
+```
+
+To undo the complete screenshot run:
+
+```bash
+.venv/bin/roy undo --screenshots
+```
+
+Always scan and create a fresh plan after files have moved or changed.
+
+## 🧹 Optional Finder-alias cleanup
+
+Finder aliases are shortcuts, not screenshots. ROY leaves them alone during normal
+screenshot organization.
+
+To review screenshot-like aliases separately:
+
+```bash
+.venv/bin/roy cleanup --screenshot-aliases
+```
+
+ROY lists every alias and separates them into:
+
+- **Broken:** the target no longer exists
+- **Redundant:** the target is already under `Pictures/Screenshots`
+- **Retained:** the target is somewhere else or the alias is protected
+
+Eligible aliases move to a ROY folder inside your Mac’s Trash only after you type:
+
+```text
+DELETE SCREENSHOT ALIASES
+```
+
+ROY does not empty Trash. Restore the latest alias-cleanup run with:
+
+```bash
+.venv/bin/roy undo --screenshot-aliases
+```
+
+## 🧰 Useful commands
+
+```bash
+.venv/bin/roy scan                              # look through configured folders
+.venv/bin/roy report                            # show the latest scan summary
+.venv/bin/roy review                            # create or resume a plan
+.venv/bin/roy execute --pilot                   # move at most 20 approved screenshots
+.venv/bin/roy execute --screenshots             # organize all approved screenshots
+.venv/bin/roy execute --screenshots --retry-blocked
+.venv/bin/roy verify --last                     # verify the latest controlled run
+.venv/bin/roy undo --pilot                      # undo the latest pilot
+.venv/bin/roy undo --screenshots                # undo the latest screenshot run
+.venv/bin/roy cleanup --screenshot-aliases      # review aliases for Trash
+.venv/bin/roy undo --screenshot-aliases         # restore latest alias cleanup
+.venv/bin/roy history                           # show screenshot-run history
+.venv/bin/roy protected                         # explain protected-file counts
+.venv/bin/roy storage                           # show read-only storage information
+.venv/bin/roy doctor                            # check the ROY setup
+```
+
+Broad, unrestricted organization remains disabled. ROY currently permits controlled
+real execution only for approved screenshot workflows and explicit alias cleanup.
+
+## 🔒 Privacy
+
+- Scanning happens locally on your Mac.
+- No telemetry is enabled by default.
+- No cloud account is required.
+- Filenames and file contents are not uploaded.
+- Reports, inventories, plans, and journals remain local and are excluded from Git.
+- Optional Ollama suggestions run locally and remain disabled unless you enable them.
+
+Your files are your business. ROY is here to organize them, not gossip about them.
+
+## 🧑‍💻 For developers and contributors
+
+ROY separates scanning, classification, safety checks, planning, validation,
+execution, transaction logging, and undo. The major modules are:
+
+- `roy_scan.py` — recursive scanning and inventory statistics
+- `roy_classify.py` — deterministic classification and destinations
+- `roy_inspect.py` — kubeconfig and repository-archive inspection
+- `roy_safety.py` — developer, project, work, and open-file protection
+- `roy_plan.py` — review plans and decisions
+- `roy_validate.py` — final execution-time validation
+- `roy_pilot.py` — controlled screenshot execution, verification, and undo
+- `roy_alias_cleanup.py` — Finder-alias review, Trash workflow, and restoration
+- `roy.py` — command-line interface
+- `tests/` — unit and temporary-filesystem integration tests
+
+Run the test suite with:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+All filesystem tests use temporary directories. Generated plans, scan inventories,
+reports, and transaction logs are local and gitignored.
+
+For a completely synthetic demonstration:
+
+```bash
+.venv/bin/roy demo
+```
 
 ## 🗺️ Roadmap
 
 Completed:
 
-- Screenshot organizer
-- Verification
-- Undo
-- Pilot mode
-- Screenshot execution
-- Safe execution-time validation
+- Screenshot planning and organization
+- Pilot mode and batch execution
+- Verification, history, and undo
+- Collision and changed-file protection
+- Hash-confirmed screenshot duplicate detection
+- Finder-alias review, Trash workflow, and restore
+- Developer and company-managed Mac protection
 
-Future:
+Still to come:
 
-- Image organization
-- Video organization
-- Duplicate cleanup
+- Explicit cleanup for hash-confirmed duplicate screenshots
+- Image, video, document, and archive organization
 - Background watch mode
 - LaunchAgent integration
-- Production GUI
-- AI semantic organization
+- Production-ready graphical interface
+- Optional local AI semantic organization
 
-ROY remains macOS-focused and intentionally conservative. Classification can be
-imperfect, so review and explicit confirmation remain part of the design.
+## ⚠️ Early Preview limitations
 
-MIT licensed. See [SECURITY.md](SECURITY.md), [PRIVACY.md](PRIVACY.md), and
-[CONTRIBUTING.md](CONTRIBUTING.md).
+- ROY is currently focused on macOS.
+- Real execution is deliberately limited to screenshots and explicit alias cleanup.
+- Classification is not perfect; human review remains essential.
+- Unknown repository origins require manual review.
+- The graphical interface is still a preview; the terminal workflow is the most
+  complete experience today.
+
+ROY is MIT licensed. See [SECURITY.md](SECURITY.md), [PRIVACY.md](PRIVACY.md),
+[CONTRIBUTING.md](CONTRIBUTING.md), and [docs/INSTALLATION.md](docs/INSTALLATION.md).

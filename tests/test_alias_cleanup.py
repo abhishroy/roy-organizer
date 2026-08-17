@@ -97,6 +97,65 @@ class AliasCleanupCase(unittest.TestCase):
         self.assertEqual(result['quarantined'], 0)
         self.assertEqual(result['blocked'], [('trash', 'trash_path_unsafe')])
 
+    def test_complete_alias_cleanup_undo_restores_original_path(self):
+        organized = self.screenshots / 'a.png'; organized.write_bytes(b'x')
+        alias = self.alias('Screenshot 2026-06-01 at 10.00.00 alias', organized)
+        cleanup = self.cleanup()
+        moved = cleanup.quarantine(cleanup.discover(), 'DELETE SCREENSHOT ALIASES')
+        self.assertEqual(moved['quarantined'], 1)
+        denied = cleanup.restore_last('yes')
+        self.assertEqual(denied['restored'], 0)
+        restored = cleanup.restore_last('RESTORE SCREENSHOT ALIASES')
+        self.assertEqual(restored['restored'], 1)
+        self.assertEqual(restored['blocked'], [])
+        self.assertTrue(alias.exists())
+        self.assertIsNone(cleanup.last_active_run())
+
+    def test_alias_undo_never_overwrites_reappeared_source(self):
+        organized = self.screenshots / 'a.png'; organized.write_bytes(b'x')
+        alias = self.alias('Screenshot 2026-06-02 at 10.00.00 alias', organized)
+        cleanup = self.cleanup()
+        cleanup.quarantine(cleanup.discover(), 'DELETE SCREENSHOT ALIASES')
+        alias.write_bytes(b'user replacement')
+        result = cleanup.restore_last('RESTORE SCREENSHOT ALIASES')
+        self.assertEqual(result['restored'], 0)
+        self.assertEqual(result['blocked'], [(str(alias), 'original_source_reappeared')])
+        self.assertEqual(alias.read_bytes(), b'user replacement')
+
+    def test_alias_undo_blocks_missing_trash_item_and_new_project_parent(self):
+        organized = self.screenshots / 'a.png'; organized.write_bytes(b'x')
+        first = self.alias('one/Screenshot 2026-06-03 at 10.00.00 alias', organized)
+        second = self.alias('two/Screenshot 2026-06-04 at 10.00.00 alias', organized)
+        cleanup = self.cleanup()
+        cleanup.quarantine(cleanup.discover(), 'DELETE SCREENSHOT ALIASES')
+        summary = cleanup.undo_summary()
+        pathlib.Path(summary['items'][0]['quarantine']).unlink()
+        (second.parent / '.git').mkdir()
+        result = cleanup.restore_last('RESTORE SCREENSHOT ALIASES')
+        reasons = {path: reason for path, reason in result['blocked']}
+        self.assertEqual(reasons[str(first)], 'quarantined_alias_missing_or_invalid')
+        self.assertEqual(reasons[str(second)], 'original_parent_now_protected')
+        self.assertEqual(result['restored'], 0)
+
+    def test_corrupt_alias_journal_fails_closed(self):
+        cleanup = self.cleanup()
+        cleanup.journal_path.write_text('{not json}\n')
+        with self.assertRaisesRegex(ValueError, 'corrupt_alias_cleanup_journal'):
+            cleanup.undo_summary()
+
+    def test_alias_undo_rejects_new_symlink_parent(self):
+        organized = self.screenshots / 'a.png'; organized.write_bytes(b'x')
+        alias = self.alias('nested/Screenshot 2026-07-01 at 10.00.00 alias', organized)
+        cleanup = self.cleanup()
+        cleanup.quarantine(cleanup.discover(), 'DELETE SCREENSHOT ALIASES')
+        alias.parent.rmdir()
+        outside = self.home / 'outside'; outside.mkdir()
+        alias.parent.symlink_to(outside, target_is_directory=True)
+        result = cleanup.restore_last('RESTORE SCREENSHOT ALIASES')
+        self.assertEqual(result['restored'], 0)
+        self.assertEqual(result['blocked'], [
+            (str(alias), 'original_parent_missing_or_outside_scan_roots')])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -851,6 +851,23 @@ def cmd_cleanup(args, config: dict):
         print(f"  BLOCKED {path}: {reason}")
 
 
+def cmd_alias_cleanup_undo(config: dict):
+    cleanup = ScreenshotAliasCleanup(config)
+    summary = cleanup.undo_summary()
+    if not summary['run_id']:
+        print("No active screenshot-alias cleanup run is available to restore.")
+        return
+    print(f"RESTORE SCREENSHOT ALIASES\n\nRun: {summary['run_id']}\n"
+          f"Aliases to restore: {len(summary['items']):,}\nOverwrites: 0")
+    for item in summary['items']:
+        print(f"  {item['quarantine']} -> {item['source']}")
+    confirmation = input("\nType exactly RESTORE SCREENSHOT ALIASES to continue: ")
+    result = cleanup.restore_last(confirmation)
+    print(f"\nRestored: {result['restored']}\nBlocked: {len(result['blocked'])}")
+    for path, reason in result['blocked']:
+        print(f"  BLOCKED {path}: {reason}")
+
+
 def cmd_status(args, config: dict):
     """Status command - show transaction log summary."""
     transaction_log = create_transaction_log(config)
@@ -1196,6 +1213,8 @@ Examples:
     undo_modes = undo_parser.add_mutually_exclusive_group()
     undo_modes.add_argument('--pilot', action='store_true', help='Undo most recent pilot batch only')
     undo_modes.add_argument('--screenshots', action='store_true', help='Undo most recent screenshot batch only')
+    undo_modes.add_argument('--screenshot-aliases', action='store_true',
+                            help='Restore most recent screenshot-alias cleanup from Trash')
     
     # status
     subparsers.add_parser('status', help='Show transaction status')
@@ -1268,6 +1287,8 @@ Examples:
             cmd_pilot_undo(config)
         elif args.screenshots:
             cmd_screenshot_undo(config)
+        elif args.screenshot_aliases:
+            cmd_alias_cleanup_undo(config)
         else:
             cmd_undo(args, config)
     elif args.command == 'status':
