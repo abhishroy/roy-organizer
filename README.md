@@ -45,11 +45,15 @@ Pictures/Organized/
 └── Other/2026/2026-08/
 ```
 
-Meaningful source folders such as Travel, Vacation, Holiday, Trip, or a configured
-destination name are kept as context. Video plans similarly distinguish Insta360,
-GoPro, and Other video before applying the year and month layout. Controlled video
-execution uses `roy execute --videos`, requires the exact phrase `EXECUTE VIDEOS`,
-and can be restored with `roy undo --videos`.
+Meaningful image folders such as Travel, Vacation, Holiday, Trip, or a configured
+destination name are kept as context. Videos use one simple, neutral structure:
+
+```text
+Movies/Organized/2026/2026-08/
+```
+
+Controlled video execution uses `roy execute --videos`, requires the exact phrase
+`EXECUTE VIDEOS`, and can be restored with `roy undo --videos`.
 
 ## 👋 What does ROY actually do?
 
@@ -77,7 +81,7 @@ No mystery cleanup. No surprise “where did my file go?” treasure hunt.
 - Find files recursively, including inside nested folders
 - Organize approved screenshots by year and month
 - Organize approved Camera, WhatsApp, Travel, and Other images by year and month
-- Plan Insta360, GoPro, and Other videos into dated collections
+- Organize approved videos into simple year and month folders
 - Review a small pilot with 20 files before doing a larger screenshot run
 - Process large screenshot plans in manageable batches
 - Continue past individually blocked files while keeping them untouched
