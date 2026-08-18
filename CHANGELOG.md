@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 — Media Library Safety
+
+- Protect iMovie, Photos, Music, Final Cut, Logic, GarageBand, and Aperture library internals.
+- Simplify Homebrew installation and everyday command documentation.
+
 ## 1.1.0 — Controlled Media Organization
 
 - Add dated Camera, WhatsApp, Travel, and Other image organization.

@@ -51,15 +51,6 @@ GoPro, and Other video before applying the year and month layout. Controlled vid
 execution uses `roy execute --videos`, requires the exact phrase `EXECUTE VIDEOS`,
 and can be restored with `roy undo --videos`.
 
-The configured image destination must already exist as a real directory. With the
-default configuration, create and inspect it once before the first image run:
-
-```bash
-mkdir -p ~/Pictures/Organized
-```
-
-ROY does not create this top level destination automatically.
-
 ## 👋 What does ROY actually do?
 
 Think of ROY as a careful file butler:
@@ -135,10 +126,19 @@ brew install abhishroy/tap/roy-organizer
 organizer doctor
 ```
 
-You can use either `organizer` or `roy`; they run the same application. Homebrew
-keeps ROY's local configuration, plans, and journals under
-`~/.local/share/roy-organizer`. The formula does not install a scheduled service,
-run in the background, or organize anything during installation.
+You can use either `organizer` or `roy`; they are two names for the same careful
+file butler. Installation does not scan, move, rename, or delete anything. ROY also
+does not run secretly in the background. You decide when it starts.
+
+Start with:
+
+```bash
+organizer scan
+organizer review
+```
+
+ROY will show what it found and ask what you want to organize. Nothing is chosen
+for you, because even a helpful butler should not rearrange the house without asking.
 
 You need:
 
@@ -309,26 +309,34 @@ ROY does not empty Trash. Restore the latest alias cleanup run with:
 ## 🧰 Useful commands
 
 ```bash
-.venv/bin/roy scan                              # look through configured folders
-.venv/bin/roy report                            # show the latest scan summary
-.venv/bin/roy review                            # create or resume a plan
-.venv/bin/roy execute --pilot                   # move at most 20 approved screenshots
-.venv/bin/roy execute --screenshots             # organize all approved screenshots
-.venv/bin/roy execute --images                  # organize all approved images
-.venv/bin/roy execute --videos                  # organize all approved videos
-.venv/bin/roy execute --screenshots --retry-blocked
-.venv/bin/roy verify --last                     # verify the latest controlled run
-.venv/bin/roy undo --pilot                      # undo the latest pilot
-.venv/bin/roy undo --screenshots                # undo the latest screenshot run
-.venv/bin/roy undo --images                     # undo the latest image run
-.venv/bin/roy undo --videos                     # undo the latest video run
-.venv/bin/roy cleanup --screenshot-aliases      # review aliases for Trash
-.venv/bin/roy undo --screenshot-aliases         # restore latest alias cleanup
-.venv/bin/roy history                           # show screenshot run history
-.venv/bin/roy protected                         # explain protected file counts
-.venv/bin/roy storage                           # show storage information without making changes
-.venv/bin/roy doctor                            # check the ROY setup
+organizer                                      # open ROY
+organizer scan                                 # look through your chosen folders
+organizer report                               # show what ROY found
+organizer review                               # choose and approve suggestions
+organizer protected                            # see what ROY refuses to touch
+organizer storage                              # see where storage is being used
+organizer score                                # show your organization score
+organizer doctor                               # check that ROY is ready
+
+organizer execute --pilot                      # try 20 approved screenshots
+organizer execute --screenshots                # organize approved screenshots
+organizer execute --images                     # organize approved images
+organizer execute --videos                     # organize approved videos
+organizer execute --screenshots --retry-blocked
+
+organizer verify --last                        # check the latest move
+organizer history                              # show earlier ROY runs
+organizer undo --pilot                         # restore the latest pilot
+organizer undo --screenshots                   # restore a screenshot run
+organizer undo --images                        # restore an image run
+organizer undo --videos                        # restore a video run
+
+organizer cleanup --screenshot-aliases         # review Finder aliases for Trash
+organizer undo --screenshot-aliases            # restore the latest alias cleanup
 ```
+
+If you installed ROY from source instead of Homebrew, replace `organizer` with
+`.venv/bin/roy` in these examples.
 
 Broad, unrestricted organization remains disabled. ROY currently permits controlled
 real execution only for approved Screenshots, Images, and Videos, plus explicit

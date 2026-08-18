@@ -55,6 +55,11 @@ class SafetyChecker:
             '.zshrc', '.zprofile', '.zlogin', '.zlogout', '.zshenv', '.zsh_history',
             '.gitconfig', '.git-credentials'
         }
+        self.protected_bundle_suffixes = {
+            '.imovielibrary', '.photoslibrary', '.photolibrary',
+            '.migratedphotolibrary', '.musiclibrary', '.logicx', '.band',
+            '.fcpbundle', '.fcplibrary', '.aplibrary'
+        }
     
     def _expand_paths(self, paths: List[str]) -> List[pathlib.Path]:
         """Expand user paths and return as Path objects."""
@@ -105,6 +110,15 @@ class SafetyChecker:
             if part.startswith('.'):
                 return True
         return False
+
+    def is_in_protected_bundle(self, path: pathlib.Path) -> bool:
+        """Protect application-managed media libraries as indivisible bundles."""
+        try:
+            candidates = (path, *path.parents, path.resolve(), *path.resolve().parents)
+        except OSError:
+            return True
+        return any(candidate.suffix.casefold() in self.protected_bundle_suffixes
+                   for candidate in candidates)
     
     def is_in_git_repo(self, path: pathlib.Path) -> bool:
         """Check if a path is inside a Git repository."""
@@ -243,6 +257,12 @@ class SafetyChecker:
 
         if self.is_developer_config(path):
             return SafetyCheckResult(False, "Protected developer configuration", "developer_config")
+
+        if self.is_in_protected_bundle(path):
+            return SafetyCheckResult(
+                False, "File is inside an application-managed media library",
+                "protected_media_library"
+            )
 
         # Check if hidden
         if self.skip_hidden and self.is_hidden(path):

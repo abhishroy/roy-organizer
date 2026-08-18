@@ -11,6 +11,25 @@ from roy_safety import SafetyChecker, SafetyCheckResult
 
 
 class TestSafetyChecker(unittest.TestCase):
+    def test_application_managed_media_library_internals_are_protected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            for suffix in ('.imovielibrary', '.photoslibrary', '.musiclibrary',
+                           '.fcpbundle', '.logicx'):
+                source = home / f'Library{suffix}' / 'Original Media' / 'clip.mov'
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b'video')
+                with self.subTest(suffix=suffix):
+                    result = self.checker.check_source(source)
+                    self.assertFalse(result.safe)
+                    self.assertEqual(result.skip_reason, 'protected_media_library')
+
+    def test_normal_media_folder_is_not_treated_as_application_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / 'Vacation' / 'clip.mov'
+            source.parent.mkdir(); source.write_bytes(b'video')
+            self.assertFalse(self.checker.is_in_protected_bundle(source))
+
     """Test safety checking functionality."""
     
     def setUp(self):
