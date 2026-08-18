@@ -23,8 +23,9 @@ PILOT_LIMIT = 20
 PILOT_PREFIX = "pilot-"
 SCREENSHOT_PREFIX = "screenshots-"
 IMAGE_PREFIX = "images-"
+VIDEO_PREFIX = "videos-"
 SCREENSHOT_CHUNK_SIZE = 100
-CONTROLLED_PREFIXES = (PILOT_PREFIX, SCREENSHOT_PREFIX, IMAGE_PREFIX)
+CONTROLLED_PREFIXES = (PILOT_PREFIX, SCREENSHOT_PREFIX, IMAGE_PREFIX, VIDEO_PREFIX)
 
 
 @dataclass
@@ -162,6 +163,12 @@ def select_image_operations(plan: ReviewPlan) -> list[PlanOperation]:
     return sorted(selected, key=lambda operation: (operation.source, operation.destination or ''))
 
 
+def select_video_operations(plan: ReviewPlan) -> list[PlanOperation]:
+    selected = [operation for operation in plan.operations
+                if operation.decision == "approved" and operation.category == "Videos"]
+    return sorted(selected, key=lambda operation: (operation.source, operation.destination or ''))
+
+
 def image_destination_uses_dated_layout(operation: PlanOperation,
                                         destination_root: pathlib.Path) -> bool:
     """Reject saved flat image plans after the dated collection policy changed."""
@@ -183,6 +190,21 @@ def image_destination_uses_dated_layout(operation: PlanOperation,
         year, month = parts[1], parts[2]
     else:
         return False
+    return bool(re.fullmatch(r'\d{4}', year) and
+                re.fullmatch(r'\d{4}-\d{2}', month) and month.startswith(year + '-'))
+
+
+def video_destination_uses_dated_layout(operation: PlanOperation,
+                                        destination_root: pathlib.Path) -> bool:
+    try:
+        relative = pathlib.Path(operation.destination or '').absolute().relative_to(
+            destination_root.absolute())
+    except ValueError:
+        return False
+    parts = relative.parts
+    if len(parts) != 4 or parts[0] not in {'Insta360', 'GoPro', 'Other'}:
+        return False
+    year, month = parts[1], parts[2]
     return bool(re.fullmatch(r'\d{4}', year) and
                 re.fullmatch(r'\d{4}-\d{2}', month) and month.startswith(year + '-'))
 
@@ -545,7 +567,8 @@ class PilotExecutor:
         undone = {record.source for record in records if record.batch_id in batch_ids
                   and record.event == 'undone'}
         verification = self.verify_run(run_id)
-        run_type = 'Images' if run_id.startswith(IMAGE_PREFIX) else 'Screenshots'
+        run_type = ('Images' if run_id.startswith(IMAGE_PREFIX) else
+                    'Videos' if run_id.startswith(VIDEO_PREFIX) else 'Screenshots')
         return {'run_id': run_id, 'type': run_type,
                 'timestamp': min((record.timestamp for record in executed + duplicates), default=''),
                 'moved': len(executed), 'already_organized': len(duplicates),
@@ -580,7 +603,7 @@ class PilotExecutor:
         run_ids = []
         for record in self.journal.records():
             run_id = self.journal.run_id(record.batch_id)
-            if run_id.startswith((SCREENSHOT_PREFIX, IMAGE_PREFIX)) and run_id not in run_ids:
+            if run_id.startswith((SCREENSHOT_PREFIX, IMAGE_PREFIX, VIDEO_PREFIX)) and run_id not in run_ids:
                 run_ids.append(run_id)
         return [self.run_summary(run_id) for run_id in reversed(run_ids)]
 
@@ -680,6 +703,80 @@ class ImageExecutor(PilotExecutor):
     def undo_image_run(self, run_id: Optional[str] = None) -> dict:
         run_id = run_id or self.journal.last_active_run((IMAGE_PREFIX,))
         return self.undo_screenshot_run(run_id) if run_id else {
+                'run_id': None, 'undone': 0, 'blocked': [], 'batches': []}
+
+
+class VideoExecutor(ImageExecutor):
+    """Controlled video-only executor using the same validated batch engine."""
+
+    def __init__(self, config: dict, journal_path: pathlib.Path,
+                 *, home: Optional[pathlib.Path] = None,
+                 checker_factory: Callable[[dict], SafetyChecker] = SafetyChecker):
+        super().__init__(config, journal_path, home=home, checker_factory=checker_factory)
+        configured = config.get('destinations', {}).get('Videos', '~/Movies/Organized')
+        if configured == '~':
+            lexical = self.home
+        elif str(configured).startswith('~/'):
+            lexical = self.home / str(configured)[2:]
+        else:
+            lexical = pathlib.Path(configured).absolute()
+        self.destination_root_lexical = lexical.absolute()
+        self.destination_root = lexical.resolve(strict=False)
+
+    def _precheck(self, operation: PlanOperation) -> Optional[str]:
+        if operation.category != 'Videos':
+            return 'video_mode_allows_videos_only'
+        # Reuse every Image executor path and safety check with a temporary
+        # category substitution; only the approved root differs.
+        original = operation.category
+        operation.category = 'Images'
+        try:
+            return super()._precheck(operation)
+        finally:
+            operation.category = original
+
+    def execute_videos(self, operations: Iterable[PlanOperation], confirmation: str,
+                       progress: Optional[Callable[[dict], None]] = None) -> dict:
+        selected = sorted(list(operations), key=lambda operation: (
+            operation.source, operation.destination or ''))
+        if confirmation != 'EXECUTE VIDEOS':
+            return {'run_id': None, 'batch_id': None, 'executed': 0,
+                    'blocked': [('videos', 'exact_confirmation_required')],
+                    'already_organized': [], 'batches': [], 'unprocessed': []}
+        run_id = VIDEO_PREFIX + datetime.now(timezone.utc).strftime(
+            '%Y%m%dT%H%M%S-') + uuid.uuid4().hex[:8]
+        batches, blocked, duplicates = [], [], []
+        executed = 0
+        started = time.monotonic()
+        total_batches = (len(selected) + SCREENSHOT_CHUNK_SIZE - 1) // SCREENSHOT_CHUNK_SIZE
+        for offset in range(0, len(selected), SCREENSHOT_CHUNK_SIZE):
+            number = offset // SCREENSHOT_CHUNK_SIZE + 1
+            result = self._execute_batch(
+                selected[offset:offset + SCREENSHOT_CHUNK_SIZE], confirmation,
+                'EXECUTE VIDEOS', VIDEO_PREFIX, SCREENSHOT_CHUNK_SIZE,
+                batch_id=f'{run_id}-batch-{number:04d}', stop_on_block=False)
+            batches.append(result)
+            executed += result['executed']
+            blocked.extend(result['blocked'])
+            duplicates.extend(result['already_organized'])
+            processed = executed + len(blocked) + len(duplicates)
+            elapsed = time.monotonic() - started
+            remaining = max(0, len(selected) - processed)
+            estimate = elapsed / processed * remaining if processed else None
+            if progress:
+                progress({'run_id': run_id, 'batch': number, 'batches': total_batches,
+                          'moved': result['executed'], 'blocked': len(result['blocked']),
+                          'elapsed': elapsed, 'remaining': remaining, 'estimate': estimate})
+        processed = sum(item['executed'] + len(item['blocked']) +
+                        len(item['already_organized']) for item in batches)
+        return {'run_id': run_id, 'batch_id': batches[-1]['batch_id'] if batches else None,
+                'executed': executed, 'blocked': blocked,
+                'already_organized': duplicates, 'batches': batches,
+                'unprocessed': selected[processed:]}
+
+    def undo_video_run(self, run_id: Optional[str] = None) -> dict:
+        run_id = run_id or self.journal.last_active_run((VIDEO_PREFIX,))
+        return self.undo_screenshot_run(run_id) if run_id else {
             'run_id': None, 'undone': 0, 'blocked': [], 'batches': []}
 
 
@@ -765,6 +862,24 @@ def image_summary(operations: Iterable[PlanOperation], config: dict,
     source_lines = '\n'.join(f'{name:<12}{counts[name]:>7,}' for name in DEFAULT_SOURCE_NAMES)
     return ('REAL IMAGE ORGANIZATION\n\n'
             f'Images approved: {len(selected):,}\n\n{source_lines}\n\n'
+            f'Total size: {total:,} bytes\n\nDestination root:\n{root}/\n\n'
+            f'Batch size: {SCREENSHOT_CHUNK_SIZE}\nDeletes: 0\nOverwrites: 0\n'
+            'Undo logging: ENABLED')
+
+
+def video_summary(operations: Iterable[PlanOperation], config: dict,
+                  home: Optional[pathlib.Path] = None) -> str:
+    selected = list(operations)
+    counts = {name: 0 for name in DEFAULT_SOURCE_NAMES}
+    for operation in selected:
+        folder = source_folder(pathlib.Path(operation.source), home)
+        counts[folder] = counts.get(folder, 0) + 1
+    total = sum(operation.size for operation in selected)
+    configured = config.get('destinations', {}).get('Videos', '~/Movies/Organized')
+    root = pathlib.Path(os.path.expanduser(str(configured)))
+    source_lines = '\n'.join(f'{name:<12}{counts[name]:>7,}' for name in DEFAULT_SOURCE_NAMES)
+    return ('REAL VIDEO ORGANIZATION\n\n'
+            f'Videos approved: {len(selected):,}\n\n{source_lines}\n\n'
             f'Total size: {total:,} bytes\n\nDestination root:\n{root}/\n\n'
             f'Batch size: {SCREENSHOT_CHUNK_SIZE}\nDeletes: 0\nOverwrites: 0\n'
             'Undo logging: ENABLED')

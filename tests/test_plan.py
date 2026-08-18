@@ -8,7 +8,8 @@ from datetime import datetime
 from unittest.mock import patch
 
 from roy import (_format_review_operation, _image_collection_counts,
-                 _image_destination_label, cmd_organize, cmd_undo,
+                 _image_destination_label, _video_destination_label,
+                 cmd_organize, cmd_undo,
                  print_plan_summary)
 from roy_classify import Category, Classifier, FileInfo
 from roy_plan import (PlanOperation, ReviewPlan, filter_needs_review,
@@ -37,6 +38,9 @@ class TestReviewPlan(unittest.TestCase):
                          'Travel/Vacation Norway/2024/2024-06')
         self.assertEqual(_image_collection_counts([camera, travel]),
                          {'Camera': 1, 'Travel': 1})
+        self.assertEqual(
+            _video_destination_label('/Movies/Organized/GoPro/2025/2025-07/GX01.mp4'),
+            'GoPro/2025/2025-07')
 
     @patch('roy.create_transaction_log')
     def test_planning_only_blocks_organize_and_undo(self, transaction_log):

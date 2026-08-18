@@ -8,7 +8,7 @@ from roy_config import PROFILES, VERSION, load_config, save_config, validate_con
 
 class TestConfiguration(unittest.TestCase):
     def test_version_and_profiles(self):
-        self.assertEqual(VERSION, '0.1.0')
+        self.assertEqual(VERSION, '1.1.0')
         self.assertEqual(PROFILES, {'personal','developer','company_managed','developer_company_managed'})
 
     def test_round_trip(self):

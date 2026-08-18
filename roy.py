@@ -28,13 +28,15 @@ from roy_analytics import organization_score, recommendations, storage_overview
 from roy_tui import launch as launch_tui
 from roy_gui import launch as launch_gui
 from roy_demo import run_demo
-from roy_pilot import (ImageExecutor, PilotExecutor, format_pilot_block,
+from roy_pilot import (ImageExecutor, PilotExecutor, VideoExecutor, format_pilot_block,
                        image_destination_uses_dated_layout, image_summary,
                        missing_plan_sources, IMAGE_PREFIX,
                        PILOT_PREFIX, SCREENSHOT_PREFIX, load_blocked_screenshots,
                        pilot_summary, save_blocked_screenshots,
                        screenshot_summary, select_image_operations,
-                       select_pilot_operations, select_screenshot_operations)
+                       select_pilot_operations, select_screenshot_operations,
+                       select_video_operations, video_destination_uses_dated_layout,
+                       video_summary, VIDEO_PREFIX)
 from roy_doctor import print_diagnostics
 from roy_alias_cleanup import ScreenshotAliasCleanup, alias_cleanup_summary
 
@@ -184,6 +186,13 @@ def _image_collection_counts(operations) -> dict[str, int]:
     return counts
 
 
+def _video_destination_label(destination: str) -> str:
+    parts = pathlib.Path(destination).parent.parts
+    if len(parts) >= 3 and parts[-3] in {'Insta360', 'GoPro', 'Other'}:
+        return '/'.join(parts[-3:])
+    return str(pathlib.Path(destination).parent)
+
+
 def _review_category(plan: ReviewPlan, category: Category):
     operations = plan.filtered(category=category.value)
     if not operations:
@@ -199,9 +208,19 @@ def _review_category(plan: ReviewPlan, category: Category):
         for collection, count in sorted(_image_collection_counts(operations).items()):
             print(f"  {collection:<24} {count:>7,} files")
         print()
+    elif category == Category.VIDEOS:
+        counts = {}
+        for operation in operations:
+            collection = _video_destination_label(operation.destination or '').split('/', 1)[0]
+            counts[collection] = counts.get(collection, 0) + 1
+        print("Collections:")
+        for collection, count in sorted(counts.items()):
+            print(f"  {collection:<24} {count:>7,} files")
+        print()
     print("Grouped by destination:")
     for destination, group in sorted(groups.items()):
         label = (_image_destination_label(group[0].destination or '') if category == Category.IMAGES
+                 else _video_destination_label(group[0].destination or '') if category == Category.VIDEOS
                  else pathlib.Path(destination).name or destination)
         print(f"  {label:<45} {len(group):>7,} files")
     print("\n[A] Approve all  [M] Review destination groups  [I] Review files  [S] Skip all  [B] Back")
@@ -723,19 +742,29 @@ def _image_executor(config: dict) -> ImageExecutor:
     return ImageExecutor(config, log_path)
 
 
+def _video_executor(config: dict) -> VideoExecutor:
+    log_path = pathlib.Path(config.get('logging', {}).get(
+        'pilot_transaction_log', 'logs/pilot-transactions.jsonl'))
+    return VideoExecutor(config, log_path)
+
+
 def cmd_execute(args, config: dict):
     """Run only explicitly gated category execution modes."""
     pilot_mode = getattr(args, 'pilot', False)
     screenshot_mode = getattr(args, 'screenshots', False)
     image_mode = getattr(args, 'images', False)
-    if not pilot_mode and not screenshot_mode and not image_mode:
-        print("Unrestricted execution is disabled. Choose --pilot, --screenshots, or --images.")
+    video_mode = getattr(args, 'videos', False)
+    if not pilot_mode and not screenshot_mode and not image_mode and not video_mode:
+        print("Unrestricted execution is disabled. Choose --pilot, --screenshots, --images, or --videos.")
         return
     retry_mode = bool(getattr(args, 'retry_blocked', False))
-    if retry_mode and not (screenshot_mode or image_mode):
-        print("Blocked retry requires --screenshots or --images.")
+    if retry_mode and not (screenshot_mode or image_mode or video_mode):
+        print("Blocked retry requires --screenshots, --images, or --videos.")
         return
-    if image_mode:
+    if video_mode:
+        blocked_path = pathlib.Path(config.get('logging', {}).get(
+            'blocked_video_report', 'data/blocked-videos-latest.json'))
+    elif image_mode:
         blocked_path = pathlib.Path(config.get('logging', {}).get(
             'blocked_image_report', 'data/blocked-images-latest.json'))
     else:
@@ -773,16 +802,19 @@ def cmd_execute(args, config: dict):
         return
     operations = (select_pilot_operations(plan) if pilot_mode else
                   select_image_operations(plan) if image_mode else
+                  select_video_operations(plan) if video_mode else
                   select_screenshot_operations(plan))
     summary = (pilot_summary(operations) if pilot_mode else
                image_summary(operations, config) if image_mode else
+               video_summary(operations, config) if video_mode else
                screenshot_summary(operations))
     print(summary)
     if not operations:
-        category = 'image' if image_mode else 'screenshot'
+        category = 'video' if video_mode else 'image' if image_mode else 'screenshot'
         print(f"\nNo approved {category} operations are eligible.")
         return
-    executor = _image_executor(config) if image_mode else _pilot_executor(config)
+    executor = (_video_executor(config) if video_mode else
+                _image_executor(config) if image_mode else _pilot_executor(config))
     if image_mode:
         old_layout = [operation for operation in operations
                       if not image_destination_uses_dated_layout(
@@ -791,6 +823,15 @@ def cmd_execute(args, config: dict):
             print("\nSTALE IMAGE LAYOUT\n")
             print(f"The saved plan contains {len(old_layout):,} image destination(s) from an older layout.")
             print("No operations were processed. Review Images again to create the dated Camera, WhatsApp, Travel, and Other plan.")
+            return
+    if video_mode:
+        old_layout = [operation for operation in operations
+                      if not video_destination_uses_dated_layout(
+                          operation, executor.destination_root_lexical)]
+        if old_layout:
+            print("\nSTALE VIDEO LAYOUT\n")
+            print(f"The saved plan contains {len(old_layout):,} video destination(s) from an older layout.")
+            print("No operations were processed. Review Videos again to create the dated Insta360, GoPro, and Other plan.")
             return
     if image_mode and (not executor.destination_root.exists() or
                        not executor.destination_root.is_dir() or
@@ -801,8 +842,17 @@ def cmd_execute(args, config: dict):
         print("Create and review this destination first, then run the command again:")
         print(f"\n  mkdir -p '{executor.destination_root_lexical}'")
         return
+    if video_mode and (not executor.destination_root.exists() or
+                       not executor.destination_root.is_dir() or
+                       executor.destination_root_lexical.is_symlink()):
+        print("\nVIDEO DESTINATION IS NOT READY\n")
+        print(f"Configured destination: {executor.destination_root_lexical}")
+        print("ROY did not create folders or process any operations.")
+        print(f"\n  mkdir -p '{executor.destination_root_lexical}'")
+        return
     required = ('EXECUTE PILOT' if pilot_mode else
-                'EXECUTE IMAGES' if image_mode else 'EXECUTE SCREENSHOTS')
+                'EXECUTE IMAGES' if image_mode else
+                'EXECUTE VIDEOS' if video_mode else 'EXECUTE SCREENSHOTS')
     confirmation = input(f"\nType exactly {required} to continue: ")
     def show_progress(progress):
         estimate = (f"{progress['estimate']:.1f} s" if progress['estimate'] is not None
@@ -816,13 +866,14 @@ def cmd_execute(args, config: dict):
 
     result = (executor.execute(operations, confirmation) if pilot_mode else
               executor.execute_images(operations, confirmation, show_progress) if image_mode else
+              executor.execute_videos(operations, confirmation, show_progress) if video_mode else
               executor.execute_screenshots(operations, confirmation, show_progress))
-    if screenshot_mode or image_mode:
+    if screenshot_mode or image_mode or video_mode:
         print(f"\nRun: {result['run_id']}")
         if result['blocked']:
             save_blocked_screenshots(blocked_path, result['run_id'], operations,
                                      result['blocked'])
-            category = 'images' if image_mode else 'screenshots'
+            category = 'videos' if video_mode else 'images' if image_mode else 'screenshots'
             print(f"\nBlocked {category} were left untouched and saved for retry:\n{blocked_path}")
             print(f"Retry with: python roy.py execute --{category} --retry-blocked")
         elif retry_mode:
@@ -830,7 +881,7 @@ def cmd_execute(args, config: dict):
             print("\nAll retry operations passed; the blocked retry list is now empty.")
     print(f"\nControlled batch: {result['batch_id'] or 'not started'}")
     print(f"Moved: {result['executed']}")
-    if screenshot_mode or image_mode:
+    if screenshot_mode or image_mode or video_mode:
         print(f"Already organized duplicates: {len(result.get('already_organized', []))}")
         for source in result.get('already_organized', []):
             print(f"  ALREADY_ORGANIZED_DUPLICATE {source}")
@@ -898,6 +949,27 @@ def cmd_image_undo(config: dict):
         return
     result = executor.undo_image_run(run_id)
     print(f"Image run: {result['run_id'] or 'none'}")
+    print(f"Restored: {result['undone']}")
+    print(f"Blocked: {len(result['blocked'])}")
+    for source, reason in result['blocked']:
+        print(f"  BLOCKED {source}: {reason}")
+
+
+def cmd_video_undo(config: dict):
+    executor = _video_executor(config)
+    run_id = executor.journal.last_active_run((VIDEO_PREFIX,))
+    if not run_id:
+        print("No active video run is available to undo.")
+        return
+    summary = executor.run_summary(run_id)
+    print(f"UNDO VIDEO RUN\n\nRun: {run_id}\nMoved: {summary['moved']:,}\n"
+          f"Batches: {summary['batches']:,}\n"
+          f"Verified: {'YES' if summary['verified'] else 'NO'}")
+    if input("\nType exactly UNDO VIDEOS to continue: ") != 'UNDO VIDEOS':
+        print("Undo cancelled.")
+        return
+    result = executor.undo_video_run(run_id)
+    print(f"Video run: {result['run_id'] or 'none'}")
     print(f"Restored: {result['undone']}")
     print(f"Blocked: {len(result['blocked'])}")
     for source, reason in result['blocked']:
@@ -1258,6 +1330,7 @@ Examples:
     execute_modes.add_argument('--pilot', action='store_true', help='Run 20-file screenshot pilot')
     execute_modes.add_argument('--screenshots', action='store_true', help='Run approved screenshot batch')
     execute_modes.add_argument('--images', action='store_true', help='Run approved image batch')
+    execute_modes.add_argument('--videos', action='store_true', help='Run approved video batch')
     execute_parser.add_argument('--retry-blocked', action='store_true',
                                 help='Retry the selected category from its last blocked report')
 
@@ -1301,6 +1374,7 @@ Examples:
     undo_modes.add_argument('--pilot', action='store_true', help='Undo most recent pilot batch only')
     undo_modes.add_argument('--screenshots', action='store_true', help='Undo most recent screenshot batch only')
     undo_modes.add_argument('--images', action='store_true', help='Undo most recent image run only')
+    undo_modes.add_argument('--videos', action='store_true', help='Undo most recent video run only')
     undo_modes.add_argument('--screenshot-aliases', action='store_true',
                             help='Restore most recent screenshot-alias cleanup from Trash')
     
@@ -1377,6 +1451,8 @@ Examples:
             cmd_screenshot_undo(config)
         elif args.images:
             cmd_image_undo(config)
+        elif args.videos:
+            cmd_video_undo(config)
         elif args.screenshot_aliases:
             cmd_alias_cleanup_undo(config)
         else:

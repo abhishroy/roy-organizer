@@ -7,12 +7,15 @@ from unittest.mock import patch
 
 from roy import cmd_execute, cmd_image_undo, cmd_screenshot_undo
 from roy_pilot import (ImageExecutor, PilotExecutor, PilotJournal, PilotRecord,
+                       VideoExecutor,
                        format_pilot_block, image_destination_uses_dated_layout,
                        missing_plan_sources,
                        IMAGE_PREFIX, SCREENSHOT_PREFIX, image_summary,
                        load_blocked_screenshots,
                        save_blocked_screenshots, screenshot_summary, select_pilot_operations,
                        select_image_operations, select_screenshot_operations)
+from roy_pilot import (select_video_operations, video_destination_uses_dated_layout,
+                       video_summary)
 from roy_plan import PlanOperation, ReviewPlan
 
 
@@ -406,6 +409,41 @@ class ImageExecutionCase(unittest.TestCase):
         self.assertFalse(image_destination_uses_dated_layout(flat, root))
         self.assertTrue(image_destination_uses_dated_layout(camera, root))
         self.assertTrue(image_destination_uses_dated_layout(travel, root))
+
+    def test_video_selection_layout_summary_and_category_restriction(self):
+        root = self.home / 'Movies/Organized'; root.mkdir(parents=True)
+        self.config['destinations']['Videos'] = str(root)
+        source = self.home / 'Desktop/GX011592.mp4'; source.write_bytes(b'video')
+        stat = source.stat()
+        operation = PlanOperation(
+            str(source), str(root / 'GoPro/2025/2025-07/GX011592.mp4'),
+            'Videos', .9, 'GoPro', 'approved', stat.st_size, 'Desktop', stat.st_mtime)
+        plan = ReviewPlan([operation, self.operation('not-video.jpg')])
+        selected = select_video_operations(plan)
+        self.assertEqual(selected, [operation])
+        self.assertTrue(video_destination_uses_dated_layout(operation, root))
+        self.assertIn('Videos approved: 1', video_summary(selected, self.config, self.home))
+        executor = VideoExecutor(self.config, self.log, home=self.home,
+                                 checker_factory=FakeChecker)
+        self.assertIsNone(executor._precheck(operation))
+        self.assertIn('videos_only', executor._precheck(self.operation('image.jpg')))
+
+    def test_video_execution_verification_and_undo(self):
+        root = self.home / 'Movies/Organized'; root.mkdir(parents=True)
+        self.config['destinations']['Videos'] = str(root)
+        source = self.home / 'Desktop/clip.mov'; source.write_bytes(b'clip')
+        stat = source.stat()
+        operation = PlanOperation(
+            str(source), str(root / 'Other/2026/2026-08/clip.mov'),
+            'Videos', .9, 'video', 'approved', stat.st_size, 'Desktop', stat.st_mtime)
+        executor = VideoExecutor(self.config, self.log, home=self.home,
+                                 checker_factory=FakeChecker)
+        result = executor.execute_videos([operation], 'EXECUTE VIDEOS')
+        self.assertEqual(result['executed'], 1)
+        self.assertEqual(executor.verify_last()['anomalies'], [])
+        undone = executor.undo_video_run(result['run_id'])
+        self.assertEqual(undone['undone'], 1)
+        self.assertTrue(source.exists())
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

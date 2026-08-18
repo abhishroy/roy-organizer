@@ -47,8 +47,9 @@ Pictures/Organized/
 
 Meaningful source folders such as Travel, Vacation, Holiday, Trip, or a configured
 destination name are kept as context. Video plans similarly distinguish Insta360,
-GoPro, and Other video before applying the year and month layout. Video execution
-is not enabled yet.
+GoPro, and Other video before applying the year and month layout. Controlled video
+execution uses `roy execute --videos`, requires the exact phrase `EXECUTE VIDEOS`,
+and can be restored with `roy undo --videos`.
 
 The configured image destination must already exist as a real directory. With the
 default configuration, create and inspect it once before the first image run:
@@ -125,6 +126,20 @@ the sofa through a narrow doorway.
 
 ## 🚀 Install ROY on your Mac
 
+### Option A: Homebrew
+
+If Homebrew is already installed, this is the quickest route:
+
+```bash
+brew install abhishroy/tap/roy-organizer
+organizer doctor
+```
+
+You can use either `organizer` or `roy`; they run the same application. Homebrew
+keeps ROY's local configuration, plans, and journals under
+`~/.local/share/roy-organizer`. The formula does not install a scheduled service,
+run in the background, or organize anything during installation.
+
 You need:
 
 - A Mac
@@ -133,7 +148,7 @@ You need:
 - No `sudo`
 - No need to disable Gatekeeper, SIP, or any Mac security setting
 
-### Option A: download the ZIP
+### Option B: download the ZIP
 
 This is the easiest option for most people.
 
@@ -166,7 +181,7 @@ This is the easiest option for most people.
 The installer creates a private Python environment inside the ROY folder. It does
 not edit your shell, PATH, global Python installation, or system files.
 
-### Option B: install with Git
+### Option C: install with Git
 
 This option is for developers who already use Git.
 
@@ -300,11 +315,13 @@ ROY does not empty Trash. Restore the latest alias cleanup run with:
 .venv/bin/roy execute --pilot                   # move at most 20 approved screenshots
 .venv/bin/roy execute --screenshots             # organize all approved screenshots
 .venv/bin/roy execute --images                  # organize all approved images
+.venv/bin/roy execute --videos                  # organize all approved videos
 .venv/bin/roy execute --screenshots --retry-blocked
 .venv/bin/roy verify --last                     # verify the latest controlled run
 .venv/bin/roy undo --pilot                      # undo the latest pilot
 .venv/bin/roy undo --screenshots                # undo the latest screenshot run
 .venv/bin/roy undo --images                     # undo the latest image run
+.venv/bin/roy undo --videos                     # undo the latest video run
 .venv/bin/roy cleanup --screenshot-aliases      # review aliases for Trash
 .venv/bin/roy undo --screenshot-aliases         # restore latest alias cleanup
 .venv/bin/roy history                           # show screenshot run history
@@ -314,7 +331,8 @@ ROY does not empty Trash. Restore the latest alias cleanup run with:
 ```
 
 Broad, unrestricted organization remains disabled. ROY currently permits controlled
-real execution only for approved screenshot workflows and explicit alias cleanup.
+real execution only for approved Screenshots, Images, and Videos, plus explicit
+alias cleanup. Installing ROY never enables automatic or scheduled organization.
 
 ## 🔒 Privacy
 

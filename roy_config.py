@@ -3,7 +3,7 @@ import json
 import pathlib
 from typing import Any, Dict, List
 
-VERSION = "0.1.0"
+VERSION = "1.1.0"
 PROFILES = {"personal", "developer", "company_managed", "developer_company_managed"}
 
 
