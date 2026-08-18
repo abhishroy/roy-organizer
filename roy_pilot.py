@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import time
 import uuid
@@ -21,8 +22,9 @@ from roy_validate import ExecutionValidator
 PILOT_LIMIT = 20
 PILOT_PREFIX = "pilot-"
 SCREENSHOT_PREFIX = "screenshots-"
+IMAGE_PREFIX = "images-"
 SCREENSHOT_CHUNK_SIZE = 100
-CONTROLLED_PREFIXES = (PILOT_PREFIX, SCREENSHOT_PREFIX)
+CONTROLLED_PREFIXES = (PILOT_PREFIX, SCREENSHOT_PREFIX, IMAGE_PREFIX)
 
 
 @dataclass
@@ -151,6 +153,38 @@ def select_screenshot_operations(plan: ReviewPlan) -> list[PlanOperation]:
     selected = [operation for operation in plan.operations
                 if operation.decision == "approved" and operation.category == "Screenshots"]
     return sorted(selected, key=lambda operation: (operation.source, operation.destination or ''))
+
+
+def select_image_operations(plan: ReviewPlan) -> list[PlanOperation]:
+    """Select every explicitly approved image and no other category."""
+    selected = [operation for operation in plan.operations
+                if operation.decision == "approved" and operation.category == "Images"]
+    return sorted(selected, key=lambda operation: (operation.source, operation.destination or ''))
+
+
+def image_destination_uses_dated_layout(operation: PlanOperation,
+                                        destination_root: pathlib.Path) -> bool:
+    """Reject saved flat image plans after the dated collection policy changed."""
+    try:
+        relative = pathlib.Path(operation.destination or '').absolute().relative_to(
+            destination_root.absolute())
+    except ValueError:
+        return False
+    parts = relative.parts
+    if not parts:
+        return False
+    if parts[0] == 'Travel':
+        if len(parts) != 5:
+            return False
+        year, month = parts[2], parts[3]
+    elif parts[0] in {'Camera', 'WhatsApp', 'Other'}:
+        if len(parts) != 4:
+            return False
+        year, month = parts[1], parts[2]
+    else:
+        return False
+    return bool(re.fullmatch(r'\d{4}', year) and
+                re.fullmatch(r'\d{4}-\d{2}', month) and month.startswith(year + '-'))
 
 
 def save_blocked_screenshots(path: pathlib.Path, run_id: str,
@@ -379,7 +413,7 @@ class PilotExecutor:
                     for directory in reversed(missing):
                         self.journal.append(PilotRecord(
                             "created_directory", batch_id, _now(), "", str(directory),
-                            "create_directory", 0, 0.0, "Validated screenshot destination parent",
+                            "create_directory", 0, 0.0, "Validated category destination parent",
                             "SAFE_TO_CREATE_DIRECTORY"))
                     shutil.move(str(source), str(destination))
                 except OSError as error:
@@ -501,7 +535,7 @@ class PilotExecutor:
                 "SAFE_TO_REMOVE_EMPTY_DIRECTORY"))
         return {"batch_id": batch_id, "undone": undone, "blocked": blocked}
 
-    def screenshot_run_summary(self, run_id: str) -> dict:
+    def run_summary(self, run_id: str) -> dict:
         records = self.journal.records()
         batch_ids = self.journal.run_batch_ids(run_id)
         executed = [record for record in records if record.batch_id in batch_ids
@@ -511,12 +545,16 @@ class PilotExecutor:
         undone = {record.source for record in records if record.batch_id in batch_ids
                   and record.event == 'undone'}
         verification = self.verify_run(run_id)
-        return {'run_id': run_id, 'type': 'Screenshots',
+        run_type = 'Images' if run_id.startswith(IMAGE_PREFIX) else 'Screenshots'
+        return {'run_id': run_id, 'type': run_type,
                 'timestamp': min((record.timestamp for record in executed + duplicates), default=''),
                 'moved': len(executed), 'already_organized': len(duplicates),
                 'batches': len(batch_ids),
                 'verified': verification['consistent'],
                 'undo_available': any(record.source not in undone for record in executed)}
+
+    def screenshot_run_summary(self, run_id: str) -> dict:
+        return self.run_summary(run_id)
 
     def undo_screenshot_run(self, run_id: Optional[str] = None) -> dict:
         run_id = run_id or self.journal.last_active_run((SCREENSHOT_PREFIX,))
@@ -542,15 +580,116 @@ class PilotExecutor:
         run_ids = []
         for record in self.journal.records():
             run_id = self.journal.run_id(record.batch_id)
-            if run_id.startswith(SCREENSHOT_PREFIX) and run_id not in run_ids:
+            if run_id.startswith((SCREENSHOT_PREFIX, IMAGE_PREFIX)) and run_id not in run_ids:
                 run_ids.append(run_id)
-        return [self.screenshot_run_summary(run_id) for run_id in reversed(run_ids)]
+        return [self.run_summary(run_id) for run_id in reversed(run_ids)]
+
+
+class ImageExecutor(PilotExecutor):
+    """Controlled image only executor that reuses the validated move engine."""
+
+    def __init__(self, config: dict, journal_path: pathlib.Path,
+                 *, home: Optional[pathlib.Path] = None,
+                 checker_factory: Callable[[dict], SafetyChecker] = SafetyChecker):
+        super().__init__(config, journal_path, home=home, checker_factory=checker_factory)
+        configured = config.get('destinations', {}).get('Images', '~/Pictures/Organized')
+        if configured == '~':
+            lexical = self.home
+        elif str(configured).startswith('~/'):
+            lexical = self.home / str(configured)[2:]
+        else:
+            lexical = pathlib.Path(configured).absolute()
+        self.destination_root_lexical = lexical.absolute()
+        self.destination_root = lexical.resolve(strict=False)
+
+    def _precheck(self, operation: PlanOperation) -> Optional[str]:
+        source = pathlib.Path(operation.source)
+        destination = pathlib.Path(operation.destination or '')
+        if operation.decision != 'approved':
+            return 'operation_not_explicitly_approved'
+        if operation.category != 'Images':
+            return 'image_mode_allows_images_only'
+        if operation.archive_origin in {'company', 'company_internal'}:
+            return 'company_repository_archive'
+        if source.is_symlink() or destination.is_symlink():
+            return 'symlink_rejected'
+        if '..' in destination.parts:
+            return 'destination_path_traversal'
+        if not any(self._inside(source, root) for root in self.scan_roots):
+            return 'source_outside_configured_scan_roots'
+        try:
+            lexical_parent = destination.absolute().parent.relative_to(
+                self.destination_root_lexical)
+        except ValueError:
+            return 'destination_outside_image_tree'
+        current = self.destination_root_lexical
+        for component in lexical_parent.parts:
+            current = current / component
+            if current.is_symlink():
+                return 'destination_parent_symlink'
+        try:
+            destination.parent.resolve(strict=False).relative_to(
+                self.destination_root.resolve(strict=False))
+        except ValueError:
+            return 'destination_outside_image_tree'
+        if not self._inside(destination, self.destination_root):
+            return 'destination_outside_image_tree'
+        return None
+
+    def execute_images(self, operations: Iterable[PlanOperation], confirmation: str,
+                       progress: Optional[Callable[[dict], None]] = None) -> dict:
+        selected = sorted(list(operations), key=lambda operation: (
+            operation.source, operation.destination or ''))
+        if confirmation != 'EXECUTE IMAGES':
+            return {'run_id': None, 'batch_id': None, 'executed': 0,
+                    'blocked': [('images', 'exact_confirmation_required')],
+                    'already_organized': [], 'batches': [], 'unprocessed': []}
+        run_id = IMAGE_PREFIX + datetime.now(timezone.utc).strftime(
+            '%Y%m%dT%H%M%S-') + uuid.uuid4().hex[:8]
+        batches = []
+        executed = 0
+        blocked = []
+        duplicates = []
+        started = time.monotonic()
+        total_batches = (len(selected) + SCREENSHOT_CHUNK_SIZE - 1) // SCREENSHOT_CHUNK_SIZE
+        for offset in range(0, len(selected), SCREENSHOT_CHUNK_SIZE):
+            number = offset // SCREENSHOT_CHUNK_SIZE + 1
+            result = self._execute_batch(
+                selected[offset:offset + SCREENSHOT_CHUNK_SIZE], confirmation,
+                'EXECUTE IMAGES', IMAGE_PREFIX, SCREENSHOT_CHUNK_SIZE,
+                batch_id=f'{run_id}-batch-{number:04d}', stop_on_block=False)
+            batches.append(result)
+            executed += result['executed']
+            blocked.extend(result['blocked'])
+            duplicates.extend(result['already_organized'])
+            processed = executed + len(blocked) + len(duplicates)
+            elapsed = time.monotonic() - started
+            remaining = max(0, len(selected) - processed)
+            estimate = elapsed / processed * remaining if processed else None
+            if progress:
+                progress({'run_id': run_id, 'batch': number, 'batches': total_batches,
+                          'moved': result['executed'], 'blocked': len(result['blocked']),
+                          'elapsed': elapsed, 'remaining': remaining, 'estimate': estimate})
+        processed = sum(item['executed'] + len(item['blocked']) +
+                        len(item['already_organized']) for item in batches)
+        return {'run_id': run_id, 'batch_id': batches[-1]['batch_id'] if batches else None,
+                'executed': executed, 'blocked': blocked,
+                'already_organized': duplicates, 'batches': batches,
+                'unprocessed': selected[processed:]}
+
+    def undo_image_run(self, run_id: Optional[str] = None) -> dict:
+        run_id = run_id or self.journal.last_active_run((IMAGE_PREFIX,))
+        return self.undo_screenshot_run(run_id) if run_id else {
+            'run_id': None, 'undone': 0, 'blocked': [], 'batches': []}
 
 
 PILOT_BLOCK_EXPLANATIONS = {
     'destination_outside_screenshot_tree': (
         'Destination is outside the approved screenshot tree.',
         'Choose a destination beneath ~/Pictures/Screenshots/.'),
+    'destination_outside_image_tree': (
+        'Destination is outside the approved image tree.',
+        'Choose a destination beneath the configured Images destination.'),
     'destination_outside_allowed_roots': (
         'Destination is outside configured destination roots.',
         'Choose an approved destination root.'),
@@ -611,3 +750,21 @@ def screenshot_summary(operations: Iterable[PlanOperation], home: Optional[pathl
             "Pictures/\n└── Screenshots/\n"
             f"({root}/)\n\nBatch size: {SCREENSHOT_CHUNK_SIZE}\n"
             "Deletes: 0\nOverwrites: 0\nUndo logging: ENABLED")
+
+
+def image_summary(operations: Iterable[PlanOperation], config: dict,
+                  home: Optional[pathlib.Path] = None) -> str:
+    selected = list(operations)
+    counts = {name: 0 for name in DEFAULT_SOURCE_NAMES}
+    for operation in selected:
+        folder = source_folder(pathlib.Path(operation.source), home)
+        counts[folder] = counts.get(folder, 0) + 1
+    total = sum(operation.size for operation in selected)
+    configured = config.get('destinations', {}).get('Images', '~/Pictures/Organized')
+    root = pathlib.Path(os.path.expanduser(str(configured)))
+    source_lines = '\n'.join(f'{name:<12}{counts[name]:>7,}' for name in DEFAULT_SOURCE_NAMES)
+    return ('REAL IMAGE ORGANIZATION\n\n'
+            f'Images approved: {len(selected):,}\n\n{source_lines}\n\n'
+            f'Total size: {total:,} bytes\n\nDestination root:\n{root}/\n\n'
+            f'Batch size: {SCREENSHOT_CHUNK_SIZE}\nDeletes: 0\nOverwrites: 0\n'
+            'Undo logging: ENABLED')

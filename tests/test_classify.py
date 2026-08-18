@@ -180,6 +180,50 @@ class TestClassifier(unittest.TestCase):
             self.assertIn("Screenshots", str(dest))
             self.assertIn("2026", str(dest))
             self.assertIn("2026-08", str(dest))
+
+    def _media(self, path, category, extension, created=datetime(2025, 7, 4)):
+        return FileInfo(
+            path=path, filename=path.name, extension=extension,
+            category=category, confidence=.9, created=created,
+            modified=datetime(2025, 8, 1))
+
+    def test_image_destinations_use_collection_year_and_month(self):
+        cases = {
+            pathlib.Path('/Users/test/Desktop/IMG_1234.heic'): 'Camera/2025/2025-07',
+            pathlib.Path('/Users/test/Downloads/WhatsApp Image 2025.jpg'): 'WhatsApp/2025/2025-07',
+            pathlib.Path('/Users/test/Pictures/random/photo.png'): 'Other/2025/2025-07',
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                info = self._media(path, Category.IMAGES, path.suffix)
+                destination = self.classifier.propose_destination(info, self.config)
+                self.assertIn(expected, destination.as_posix())
+                self.assertEqual(destination.name, path.name)
+
+    def test_meaningful_travel_folder_is_preserved_and_dated(self):
+        path = pathlib.Path('/Users/test/Desktop/Vacation Norway/IMG_1234.heic')
+        info = self._media(path, Category.IMAGES, '.heic')
+        destination = self.classifier.propose_destination(info, self.config)
+        self.assertIn('Travel/Vacation Norway/2025/2025-07', destination.as_posix())
+
+    def test_travel_context_is_sanitized_to_one_component(self):
+        path = pathlib.Path('/Users/test/Desktop/Holiday: Norway/photo.jpg')
+        info = self._media(path, Category.IMAGES, '.jpg')
+        destination = self.classifier.propose_destination(info, self.config)
+        self.assertIn('Travel/Holiday Norway/2025/2025-07', destination.as_posix())
+
+    def test_video_destinations_recognize_camera_families(self):
+        cases = {
+            pathlib.Path('/Users/test/Movies/Insta360/VID_20251120_152408_00_347.mp4'): 'Insta360',
+            pathlib.Path('/Users/test/Desktop/GX011592.mp4'): 'GoPro',
+            pathlib.Path('/Users/test/Downloads/movie.mov'): 'Other',
+        }
+        for path, collection in cases.items():
+            with self.subTest(path=path):
+                info = self._media(path, Category.VIDEOS, path.suffix)
+                destination = self.classifier.propose_destination(info, self.config)
+                self.assertIn(f'{collection}/2025/2025-07', destination.as_posix())
+                self.assertEqual(destination.name, path.name)
     
     def test_low_confidence_needs_review(self):
         """Test that low confidence files go to NeedsReview."""

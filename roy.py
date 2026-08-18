@@ -28,11 +28,13 @@ from roy_analytics import organization_score, recommendations, storage_overview
 from roy_tui import launch as launch_tui
 from roy_gui import launch as launch_gui
 from roy_demo import run_demo
-from roy_pilot import (PilotExecutor, format_pilot_block, missing_plan_sources,
+from roy_pilot import (ImageExecutor, PilotExecutor, format_pilot_block,
+                       image_destination_uses_dated_layout, image_summary,
+                       missing_plan_sources, IMAGE_PREFIX,
                        PILOT_PREFIX, SCREENSHOT_PREFIX, load_blocked_screenshots,
                        pilot_summary, save_blocked_screenshots,
-                       screenshot_summary, select_pilot_operations,
-                       select_screenshot_operations)
+                       screenshot_summary, select_image_operations,
+                       select_pilot_operations, select_screenshot_operations)
 from roy_doctor import print_diagnostics
 from roy_alias_cleanup import ScreenshotAliasCleanup, alias_cleanup_summary
 
@@ -163,6 +165,25 @@ def _show_needs_review(items, page=0, page_size=25):
         print(f"  {item.path}  ({format_size(item.size)})")
 
 
+def _image_destination_label(destination: str) -> str:
+    """Return a useful collection/date label without assuming a fixed home path."""
+    parts = pathlib.Path(destination).parent.parts
+    if len(parts) >= 4 and parts[-4] == 'Travel':
+        return '/'.join(parts[-4:])
+    if len(parts) >= 3 and parts[-3] in {'Camera', 'WhatsApp', 'Other'}:
+        return '/'.join(parts[-3:])
+    return str(pathlib.Path(destination).parent)
+
+
+def _image_collection_counts(operations) -> dict[str, int]:
+    counts = {}
+    for operation in operations:
+        label = _image_destination_label(operation.destination or '')
+        collection = label.split('/', 1)[0]
+        counts[collection] = counts.get(collection, 0) + 1
+    return counts
+
+
 def _review_category(plan: ReviewPlan, category: Category):
     operations = plan.filtered(category=category.value)
     if not operations:
@@ -173,9 +194,16 @@ def _review_category(plan: ReviewPlan, category: Category):
     for source, group in sorted(plan.grouped(operations, by='source').items()):
         print(f"  {source:<24} {len(group):>7,} files")
     print()
+    if category == Category.IMAGES:
+        print("Collections:")
+        for collection, count in sorted(_image_collection_counts(operations).items()):
+            print(f"  {collection:<24} {count:>7,} files")
+        print()
     print("Grouped by destination:")
     for destination, group in sorted(groups.items()):
-        print(f"  {pathlib.Path(destination).name or destination:<24} {len(group):>7,} files")
+        label = (_image_destination_label(group[0].destination or '') if category == Category.IMAGES
+                 else pathlib.Path(destination).name or destination)
+        print(f"  {label:<45} {len(group):>7,} files")
     print("\n[A] Approve all  [M] Review destination groups  [I] Review files  [S] Skip all  [B] Back")
     choice = input("Choose: ").strip().upper()
     if choice == 'A':
@@ -689,19 +717,30 @@ def _pilot_executor(config: dict) -> PilotExecutor:
     return PilotExecutor(config, log_path)
 
 
+def _image_executor(config: dict) -> ImageExecutor:
+    log_path = pathlib.Path(config.get('logging', {}).get(
+        'pilot_transaction_log', 'logs/pilot-transactions.jsonl'))
+    return ImageExecutor(config, log_path)
+
+
 def cmd_execute(args, config: dict):
-    """Run only explicitly gated screenshot execution modes."""
+    """Run only explicitly gated category execution modes."""
     pilot_mode = getattr(args, 'pilot', False)
     screenshot_mode = getattr(args, 'screenshots', False)
-    if not pilot_mode and not screenshot_mode:
-        print("Unrestricted execution is disabled. Use --pilot or --screenshots.")
+    image_mode = getattr(args, 'images', False)
+    if not pilot_mode and not screenshot_mode and not image_mode:
+        print("Unrestricted execution is disabled. Choose --pilot, --screenshots, or --images.")
         return
     retry_mode = bool(getattr(args, 'retry_blocked', False))
-    if retry_mode and not screenshot_mode:
-        print("Blocked screenshot retry requires --screenshots.")
+    if retry_mode and not (screenshot_mode or image_mode):
+        print("Blocked retry requires --screenshots or --images.")
         return
-    blocked_path = pathlib.Path(config.get('logging', {}).get(
-        'blocked_screenshot_report', 'data/blocked-screenshots-latest.json'))
+    if image_mode:
+        blocked_path = pathlib.Path(config.get('logging', {}).get(
+            'blocked_image_report', 'data/blocked-images-latest.json'))
+    else:
+        blocked_path = pathlib.Path(config.get('logging', {}).get(
+            'blocked_screenshot_report', 'data/blocked-screenshots-latest.json'))
     plan_path = pathlib.Path(config.get('review', {}).get('plan_file', 'data/current_plan.json'))
     if retry_mode:
         if not blocked_path.exists():
@@ -732,15 +771,39 @@ def cmd_execute(args, config: dict):
         stale_source = blocked_path if retry_mode else plan_path
         print(f"\nThe stale input was retained for inspection: {stale_source}")
         return
-    operations = (select_pilot_operations(plan) if pilot_mode
-                  else select_screenshot_operations(plan))
-    print(pilot_summary(operations) if pilot_mode else screenshot_summary(operations))
+    operations = (select_pilot_operations(plan) if pilot_mode else
+                  select_image_operations(plan) if image_mode else
+                  select_screenshot_operations(plan))
+    summary = (pilot_summary(operations) if pilot_mode else
+               image_summary(operations, config) if image_mode else
+               screenshot_summary(operations))
+    print(summary)
     if not operations:
-        print("\nNo approved screenshot operations are eligible.")
+        category = 'image' if image_mode else 'screenshot'
+        print(f"\nNo approved {category} operations are eligible.")
         return
-    required = "EXECUTE PILOT" if pilot_mode else "EXECUTE SCREENSHOTS"
+    executor = _image_executor(config) if image_mode else _pilot_executor(config)
+    if image_mode:
+        old_layout = [operation for operation in operations
+                      if not image_destination_uses_dated_layout(
+                          operation, executor.destination_root_lexical)]
+        if old_layout:
+            print("\nSTALE IMAGE LAYOUT\n")
+            print(f"The saved plan contains {len(old_layout):,} image destination(s) from an older layout.")
+            print("No operations were processed. Review Images again to create the dated Camera, WhatsApp, Travel, and Other plan.")
+            return
+    if image_mode and (not executor.destination_root.exists() or
+                       not executor.destination_root.is_dir() or
+                       executor.destination_root_lexical.is_symlink()):
+        print("\nIMAGE DESTINATION IS NOT READY\n")
+        print(f"Configured destination: {executor.destination_root_lexical}")
+        print("ROY did not create folders or process any operations.")
+        print("Create and review this destination first, then run the command again:")
+        print(f"\n  mkdir -p '{executor.destination_root_lexical}'")
+        return
+    required = ('EXECUTE PILOT' if pilot_mode else
+                'EXECUTE IMAGES' if image_mode else 'EXECUTE SCREENSHOTS')
     confirmation = input(f"\nType exactly {required} to continue: ")
-    executor = _pilot_executor(config)
     def show_progress(progress):
         estimate = (f"{progress['estimate']:.1f} s" if progress['estimate'] is not None
                     else 'calculating')
@@ -751,21 +814,23 @@ def cmd_execute(args, config: dict):
         print(f"Remaining: {progress['remaining']:,} files")
         print(f"Estimated: {estimate}")
 
-    result = (executor.execute(operations, confirmation) if pilot_mode
-              else executor.execute_screenshots(operations, confirmation, show_progress))
-    if screenshot_mode:
+    result = (executor.execute(operations, confirmation) if pilot_mode else
+              executor.execute_images(operations, confirmation, show_progress) if image_mode else
+              executor.execute_screenshots(operations, confirmation, show_progress))
+    if screenshot_mode or image_mode:
         print(f"\nRun: {result['run_id']}")
         if result['blocked']:
             save_blocked_screenshots(blocked_path, result['run_id'], operations,
                                      result['blocked'])
-            print(f"\nBlocked screenshots were left untouched and saved for retry:\n{blocked_path}")
-            print("Retry with: python roy.py execute --screenshots --retry-blocked")
+            category = 'images' if image_mode else 'screenshots'
+            print(f"\nBlocked {category} were left untouched and saved for retry:\n{blocked_path}")
+            print(f"Retry with: python roy.py execute --{category} --retry-blocked")
         elif retry_mode:
             save_blocked_screenshots(blocked_path, result['run_id'], operations, [])
             print("\nAll retry operations passed; the blocked retry list is now empty.")
-    print(f"\nPilot batch: {result['batch_id'] or 'not started'}")
+    print(f"\nControlled batch: {result['batch_id'] or 'not started'}")
     print(f"Moved: {result['executed']}")
-    if screenshot_mode:
+    if screenshot_mode or image_mode:
         print(f"Already organized duplicates: {len(result.get('already_organized', []))}")
         for source in result.get('already_organized', []):
             print(f"  ALREADY_ORGANIZED_DUPLICATE {source}")
@@ -780,7 +845,7 @@ def cmd_verify(args, config: dict):
         print("Verification requires --last.")
         return
     result = _pilot_executor(config).verify_last()
-    print(f"Pilot batch: {result['batch_id'] or 'none'}")
+    print(f"Controlled batch: {result['batch_id'] or 'none'}")
     print(f"Moved files verified: {result['moved']}")
     print(f"Transaction log consistent: {'YES' if result['consistent'] else 'NO'}")
     print(f"Anomalies: {len(result['anomalies'])}")
@@ -818,10 +883,31 @@ def cmd_screenshot_undo(config: dict):
         print(f"  BLOCKED {source}: {reason}")
 
 
+def cmd_image_undo(config: dict):
+    executor = _image_executor(config)
+    run_id = executor.journal.last_active_run((IMAGE_PREFIX,))
+    if not run_id:
+        print("No active image run is available to undo.")
+        return
+    summary = executor.run_summary(run_id)
+    print(f"UNDO IMAGE RUN\n\nRun: {run_id}\nMoved: {summary['moved']:,}\n"
+          f"Batches: {summary['batches']:,}\n"
+          f"Verified: {'YES' if summary['verified'] else 'NO'}")
+    if input("\nType exactly UNDO IMAGES to continue: ") != 'UNDO IMAGES':
+        print("Undo cancelled.")
+        return
+    result = executor.undo_image_run(run_id)
+    print(f"Image run: {result['run_id'] or 'none'}")
+    print(f"Restored: {result['undone']}")
+    print(f"Blocked: {len(result['blocked'])}")
+    for source, reason in result['blocked']:
+        print(f"  BLOCKED {source}: {reason}")
+
+
 def cmd_history(args, config: dict):
     runs = _pilot_executor(config).history()
     if not runs:
-        print("No screenshot runs recorded.")
+        print("No controlled category runs recorded.")
         return
     for index, run in enumerate(runs, 1):
         print(f"Run {index}\n\nID: {run['run_id']}\nType: {run['type']}\n"
@@ -1167,12 +1253,13 @@ Examples:
     # organize
     subparsers.add_parser('organize', help='Organize files')
 
-    execute_parser = subparsers.add_parser('execute', help='Controlled screenshot execution')
+    execute_parser = subparsers.add_parser('execute', help='Controlled category execution')
     execute_modes = execute_parser.add_mutually_exclusive_group()
     execute_modes.add_argument('--pilot', action='store_true', help='Run 20-file screenshot pilot')
     execute_modes.add_argument('--screenshots', action='store_true', help='Run approved screenshot batch')
+    execute_modes.add_argument('--images', action='store_true', help='Run approved image batch')
     execute_parser.add_argument('--retry-blocked', action='store_true',
-                                help='Retry screenshots from the last blocked report')
+                                help='Retry the selected category from its last blocked report')
 
     verify_parser = subparsers.add_parser('verify', help='Verify pilot transaction state')
     verify_parser.add_argument('--last', action='store_true', help='Verify most recent pilot batch')
@@ -1213,6 +1300,7 @@ Examples:
     undo_modes = undo_parser.add_mutually_exclusive_group()
     undo_modes.add_argument('--pilot', action='store_true', help='Undo most recent pilot batch only')
     undo_modes.add_argument('--screenshots', action='store_true', help='Undo most recent screenshot batch only')
+    undo_modes.add_argument('--images', action='store_true', help='Undo most recent image run only')
     undo_modes.add_argument('--screenshot-aliases', action='store_true',
                             help='Restore most recent screenshot-alias cleanup from Trash')
     
@@ -1287,6 +1375,8 @@ Examples:
             cmd_pilot_undo(config)
         elif args.screenshots:
             cmd_screenshot_undo(config)
+        elif args.images:
+            cmd_image_undo(config)
         elif args.screenshot_aliases:
             cmd_alias_cleanup_undo(config)
         else:

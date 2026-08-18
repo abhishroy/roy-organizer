@@ -5,12 +5,14 @@ import io
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from roy import cmd_execute, cmd_screenshot_undo
-from roy_pilot import (PilotExecutor, PilotJournal, PilotRecord,
-                       format_pilot_block, missing_plan_sources,
-                       SCREENSHOT_PREFIX, load_blocked_screenshots,
+from roy import cmd_execute, cmd_image_undo, cmd_screenshot_undo
+from roy_pilot import (ImageExecutor, PilotExecutor, PilotJournal, PilotRecord,
+                       format_pilot_block, image_destination_uses_dated_layout,
+                       missing_plan_sources,
+                       IMAGE_PREFIX, SCREENSHOT_PREFIX, image_summary,
+                       load_blocked_screenshots,
                        save_blocked_screenshots, screenshot_summary, select_pilot_operations,
-                       select_screenshot_operations)
+                       select_image_operations, select_screenshot_operations)
 from roy_plan import PlanOperation, ReviewPlan
 
 
@@ -390,6 +392,193 @@ class PilotCase(unittest.TestCase):
         retry = load_blocked_screenshots(report)
         self.assertEqual(len(retry), 1)
         self.assertEqual(retry[0].source, operations[120].source)
+
+
+class ImageExecutionCase(unittest.TestCase):
+    def test_dated_image_layout_rejects_saved_flat_plan(self):
+        root = pathlib.Path('/Users/test/Pictures/Organized')
+        flat = PlanOperation('/source/a.jpg', str(root / 'a.jpg'),
+                             'Images', .9, 'test', 'approved')
+        camera = PlanOperation('/source/a.heic', str(root / 'Camera/2025/2025-07/a.heic'),
+                               'Images', .9, 'test', 'approved')
+        travel = PlanOperation('/source/b.jpg', str(root / 'Travel/Vacation/2025/2025-07/b.jpg'),
+                               'Images', .9, 'test', 'approved')
+        self.assertFalse(image_destination_uses_dated_layout(flat, root))
+        self.assertTrue(image_destination_uses_dated_layout(camera, root))
+        self.assertTrue(image_destination_uses_dated_layout(travel, root))
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = pathlib.Path(self.temp.name)
+        for name in ('Desktop', 'Downloads', 'Documents', 'Pictures', 'Movies'):
+            (self.home / name).mkdir()
+        (self.home / 'Pictures/Organized').mkdir()
+        self.log = self.home / 'controlled.jsonl'
+        self.config = {
+            'machine_profile': 'developer_company_managed',
+            'scan_paths': [str(self.home / name) for name in
+                           ('Desktop', 'Downloads', 'Documents', 'Pictures', 'Movies')],
+            'destinations': {'Images': str(self.home / 'Pictures/Organized')},
+            'classification': {'work_terms': ['company', 'work']},
+            'safety': {'planning_only': True, 'skip_hidden': True,
+                       'skip_git_repos': True, 'skip_open_files': True,
+                       'protected_paths': [str(self.home / '.kube')]},
+        }
+        FakeChecker.state = 'KNOWN'; FakeChecker.open_paths = set()
+        self.executor = ImageExecutor(self.config, self.log, home=self.home,
+                                      checker_factory=FakeChecker)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def operation(self, name='photo.jpg', *, category='Images', decision='approved',
+                  source=None, destination=None, content=b'image'):
+        source = source or self.home / 'Desktop' / name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(content)
+        stat = source.stat()
+        destination = destination or self.home / 'Pictures/Organized' / name
+        return PlanOperation(str(source), str(destination), category, .9, 'image rule',
+                             decision, stat.st_size, 'Desktop', stat.st_mtime)
+
+    def test_image_selection_and_summary(self):
+        image = self.operation('a.jpg')
+        screenshot = self.operation('b.png', category='Screenshots')
+        pending = self.operation('c.jpg', decision='pending')
+        selected = select_image_operations(ReviewPlan([image, screenshot, pending]))
+        self.assertEqual(selected, [image])
+        rendered = image_summary(selected, self.config, self.home)
+        self.assertIn('Images approved: 1', rendered)
+        self.assertIn(str(self.home / 'Pictures/Organized'), rendered)
+        self.assertIn('Deletes: 0', rendered)
+
+    def test_images_only_and_destination_tree_are_enforced(self):
+        self.assertIn('images_only', self.executor.validate(
+            self.operation('screen.png', category='Screenshots')))
+        outside = self.home / 'Documents/photo.jpg'
+        self.assertIn('destination_outside_image_tree', self.executor.validate(
+            self.operation('outside.jpg', destination=outside)))
+        self.assertIn('not_explicitly_approved', self.executor.validate(
+            self.operation('pending.jpg', decision='pending')))
+
+    def test_image_destination_root_symlink_is_blocked(self):
+        root = self.home / 'Pictures/Organized'
+        root.rmdir()
+        outside = self.home / 'outside'; outside.mkdir()
+        root.symlink_to(outside, target_is_directory=True)
+        executor = ImageExecutor(self.config, self.log, home=self.home,
+                                 checker_factory=FakeChecker)
+        operation = self.operation('root-link.jpg', destination=root/'root-link.jpg')
+        self.assertIn('approved_destination_root_missing_or_invalid',
+                      executor.validate(operation))
+
+    def test_cli_missing_image_root_stops_before_confirmation(self):
+        operation = self.operation(
+            'cli-root.jpg', destination=self.home /
+            'Pictures/Organized/Other/2026/2026-08/cli-root.jpg')
+        plan_path = self.home / 'plan.json'
+        ReviewPlan([operation]).save(plan_path)
+        self.config['review'] = {'plan_file': str(plan_path)}
+        (self.home / 'Pictures/Organized').rmdir()
+        executor = ImageExecutor(self.config, self.log, home=self.home,
+                                 checker_factory=FakeChecker)
+        args = type('Args', (), {'pilot': False, 'screenshots': False,
+                                 'images': True, 'retry_blocked': False})()
+        output = io.StringIO()
+        with patch('roy._image_executor', return_value=executor), \
+                patch('builtins.input', side_effect=AssertionError('must not confirm')), \
+                redirect_stdout(output):
+            cmd_execute(args, self.config)
+        self.assertIn('IMAGE DESTINATION IS NOT READY', output.getvalue())
+        self.assertTrue(pathlib.Path(operation.source).exists())
+
+    def test_image_mode_protects_work_projects_symlinks_and_open_files(self):
+        work = self.operation(source=self.home/'Desktop/company/photo.jpg')
+        self.assertIn('work_data', self.executor.validate(work))
+        project = self.home/'Desktop/project'; (project/'.git').mkdir(parents=True)
+        project_image = self.operation(source=project/'photo.jpg')
+        self.assertIn('software_project', self.executor.validate(project_image))
+        target = self.home/'Desktop/target.jpg'; target.write_bytes(b'x')
+        link = self.home/'Desktop/link.jpg'; link.symlink_to(target)
+        stat = target.stat()
+        linked = PlanOperation(str(link), str(self.home/'Pictures/Organized/link.jpg'),
+                               'Images', .9, 'image', 'approved', stat.st_size,
+                               'Desktop', stat.st_mtime)
+        self.assertIn('symlink_rejected', self.executor.validate(linked))
+        opened = self.operation('open.jpg'); FakeChecker.open_paths = {pathlib.Path(opened.source)}
+        self.assertIn('open_file', self.executor.validate(opened))
+
+    def test_image_mode_blocks_changed_unknown_and_collision(self):
+        changed = self.operation('changed.jpg'); pathlib.Path(changed.source).write_bytes(b'changed')
+        self.assertIn('source_changed', self.executor.validate(changed))
+        FakeChecker.state = 'OPEN_FILE_STATE_UNKNOWN'
+        self.assertIn('open_file_state_unknown', self.executor.validate(
+            self.operation('unknown.jpg')))
+        FakeChecker.state = 'KNOWN'
+        collision = self.operation('collision.jpg')
+        pathlib.Path(collision.destination).write_bytes(b'different')
+        result = self.executor.execute_images([collision], 'EXECUTE IMAGES')
+        self.assertEqual(result['executed'], 0)
+        self.assertEqual(result['blocked'], [(collision.source, 'collision')])
+
+    def test_hash_equal_image_is_reported_without_moving(self):
+        operation = self.operation('duplicate.jpg')
+        pathlib.Path(operation.destination).write_bytes(pathlib.Path(operation.source).read_bytes())
+        result = self.executor.execute_images([operation], 'EXECUTE IMAGES')
+        self.assertEqual(result['already_organized'], [operation.source])
+        self.assertEqual(result['blocked'], [])
+        self.assertTrue(pathlib.Path(operation.source).exists())
+
+    def test_multi_batch_image_execute_verify_history_and_undo(self):
+        operations = [self.operation(f'image-{number:03d}.jpg') for number in range(205)]
+        progress = []
+        result = self.executor.execute_images(operations, 'EXECUTE IMAGES', progress.append)
+        self.assertEqual(result['executed'], 205)
+        self.assertEqual([batch['executed'] for batch in result['batches']], [100, 100, 5])
+        self.assertTrue(result['run_id'].startswith(IMAGE_PREFIX))
+        self.assertEqual(self.executor.verify_last()['moved'], 205)
+        summary = self.executor.run_summary(result['run_id'])
+        self.assertEqual(summary['type'], 'Images')
+        self.assertTrue(summary['verified'])
+        undo = self.executor.undo_image_run(result['run_id'])
+        self.assertEqual(undo['undone'], 205)
+        self.assertTrue(all(pathlib.Path(operation.source).exists() for operation in operations))
+
+    def test_image_undo_requires_exact_confirmation(self):
+        operation = self.operation('undo.jpg')
+        self.executor.execute_images([operation], 'EXECUTE IMAGES')
+        with patch('roy._image_executor', return_value=self.executor), \
+                patch('builtins.input', return_value='yes'), redirect_stdout(io.StringIO()):
+            cmd_image_undo(self.config)
+        self.assertFalse(pathlib.Path(operation.source).exists())
+        with patch('roy._image_executor', return_value=self.executor), \
+                patch('builtins.input', return_value='UNDO IMAGES'), \
+                redirect_stdout(io.StringIO()):
+            cmd_image_undo(self.config)
+        self.assertTrue(pathlib.Path(operation.source).exists())
+
+    def test_interrupted_image_run_is_verifiable_and_recoverable(self):
+        operations = [self.operation(f'interrupted-{number:03d}.jpg') for number in range(105)]
+        real_move = pathlib.Path.rename
+        calls = 0
+
+        def interrupt_after_move(source, destination):
+            nonlocal calls
+            calls += 1
+            real_move(pathlib.Path(source), pathlib.Path(destination))
+            if calls == 51:
+                raise KeyboardInterrupt()
+
+        with patch('roy_pilot.shutil.move', side_effect=interrupt_after_move):
+            with self.assertRaises(KeyboardInterrupt):
+                self.executor.execute_images(operations, 'EXECUTE IMAGES')
+        verification = self.executor.verify_last()
+        self.assertFalse(verification['consistent'])
+        self.assertTrue(any('interrupted_after_move' in item
+                            for item in verification['anomalies']))
+        undo = self.executor.undo_image_run()
+        self.assertEqual(undo['undone'], 51)
+        self.assertTrue(self.executor.verify_last()['consistent'])
 
 
 if __name__ == '__main__':

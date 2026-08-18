@@ -7,7 +7,9 @@ from contextlib import redirect_stdout
 from datetime import datetime
 from unittest.mock import patch
 
-from roy import _format_review_operation, cmd_organize, cmd_undo, print_plan_summary
+from roy import (_format_review_operation, _image_collection_counts,
+                 _image_destination_label, cmd_organize, cmd_undo,
+                 print_plan_summary)
 from roy_classify import Category, Classifier, FileInfo
 from roy_plan import (PlanOperation, ReviewPlan, filter_needs_review,
                       parse_category_choices, parse_source_choices)
@@ -24,6 +26,18 @@ def item(path, category, destination=None, size=10, work=False):
 
 
 class TestReviewPlan(unittest.TestCase):
+    def test_image_review_labels_show_collection_context(self):
+        camera = PlanOperation('/a.heic', '/Pictures/Organized/Camera/2025/2025-07/a.heic',
+                               'Images', .9, 'test')
+        travel = PlanOperation('/b.jpg', '/Pictures/Organized/Travel/Vacation Norway/2024/2024-06/b.jpg',
+                               'Images', .9, 'test')
+        self.assertEqual(_image_destination_label(camera.destination),
+                         'Camera/2025/2025-07')
+        self.assertEqual(_image_destination_label(travel.destination),
+                         'Travel/Vacation Norway/2024/2024-06')
+        self.assertEqual(_image_collection_counts([camera, travel]),
+                         {'Camera': 1, 'Travel': 1})
+
     @patch('roy.create_transaction_log')
     def test_planning_only_blocks_organize_and_undo(self, transaction_log):
         args = type('Args', (), {'dry_run': False, 'last': None, 'batch': None})()

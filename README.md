@@ -7,9 +7,9 @@ ROY helps you tidy files on your Mac without behaving like an overconfident robo
 intern. It looks first, explains what it found, asks what you want, and only acts
 after you approve the plan.
 
-Today, ROY’s workflow for real files is focused on **screenshots**. It can find them
-inside Desktop, Downloads, Documents, Pictures, and Movies. It also searches nested
-folders and organizes everything into one clean home:
+Today, ROY’s most established workflow for real files is focused on **screenshots**.
+It can find them inside Desktop, Downloads, Documents, Pictures, and Movies. It also
+searches nested folders and organizes everything into one clean home:
 
 ```text
 Pictures/
@@ -24,6 +24,40 @@ Pictures/
 
 ROY is an **Early Preview for macOS**. It is intentionally cautious. That means
 you may occasionally hear, “Nope, I’m not touching that.” This is a feature.
+
+Controlled image execution is also available as an Early Preview. It uses the same
+approval, validation, journaling, verification, and undo protections as screenshots.
+Other categories remain planning only while they are introduced one at a time.
+
+To prepare an image plan, run `roy review`, choose Images, review the proposals, and
+save the plan. Then use `roy execute --images`. ROY requires the exact confirmation
+phrase `EXECUTE IMAGES`. Verify with `roy verify --last` and restore the run with
+`roy undo --images` if needed.
+
+Images are not dropped into one giant folder. ROY sorts them by useful local
+signals and then by year and month:
+
+```text
+Pictures/Organized/
+├── Camera/2026/2026-08/
+├── WhatsApp/2026/2026-08/
+├── Travel/Vacation Norway/2026/2026-08/
+└── Other/2026/2026-08/
+```
+
+Meaningful source folders such as Travel, Vacation, Holiday, Trip, or a configured
+destination name are kept as context. Video plans similarly distinguish Insta360,
+GoPro, and Other video before applying the year and month layout. Video execution
+is not enabled yet.
+
+The configured image destination must already exist as a real directory. With the
+default configuration, create and inspect it once before the first image run:
+
+```bash
+mkdir -p ~/Pictures/Organized
+```
+
+ROY does not create this top level destination automatically.
 
 ## 👋 What does ROY actually do?
 
@@ -50,6 +84,8 @@ No mystery cleanup. No surprise “where did my file go?” treasure hunt.
 
 - Find files recursively, including inside nested folders
 - Organize approved screenshots by year and month
+- Organize approved Camera, WhatsApp, Travel, and Other images by year and month
+- Plan Insta360, GoPro, and Other videos into dated collections
 - Review a small pilot with 20 files before doing a larger screenshot run
 - Process large screenshot plans in manageable batches
 - Continue past individually blocked files while keeping them untouched
@@ -263,10 +299,12 @@ ROY does not empty Trash. Restore the latest alias cleanup run with:
 .venv/bin/roy review                            # create or resume a plan
 .venv/bin/roy execute --pilot                   # move at most 20 approved screenshots
 .venv/bin/roy execute --screenshots             # organize all approved screenshots
+.venv/bin/roy execute --images                  # organize all approved images
 .venv/bin/roy execute --screenshots --retry-blocked
 .venv/bin/roy verify --last                     # verify the latest controlled run
 .venv/bin/roy undo --pilot                      # undo the latest pilot
 .venv/bin/roy undo --screenshots                # undo the latest screenshot run
+.venv/bin/roy undo --images                     # undo the latest image run
 .venv/bin/roy cleanup --screenshot-aliases      # review aliases for Trash
 .venv/bin/roy undo --screenshot-aliases         # restore latest alias cleanup
 .venv/bin/roy history                           # show screenshot run history

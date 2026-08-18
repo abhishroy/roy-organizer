@@ -381,6 +381,51 @@ class Classifier:
         def destination_root(category: Category) -> pathlib.Path:
             value = configured.get(category.value, defaults.get(category, '~/Downloads/Organized'))
             return expand_destination(value)
+
+        def dated_media_root(root: pathlib.Path, collection: pathlib.Path) -> pathlib.Path:
+            date = file_info.created or file_info.modified or datetime.now()
+            return root / collection / date.strftime('%Y') / date.strftime('%Y-%m')
+
+        def safe_context(value: str) -> str:
+            # A source directory name may be useful context, but it must remain
+            # one plain destination component.
+            value = re.sub(r'[\x00-\x1f/:]', ' ', value)
+            return re.sub(r'\s+', ' ', value).strip(' .')[:80] or 'Travel'
+
+        def travel_context() -> Optional[str]:
+            signals = {'travel', 'vacation', 'holiday', 'trip'}
+            ignored = {'desktop', 'downloads', 'documents', 'pictures', 'movies'}
+            known = {str(value).casefold() for value in self.known_destinations}
+            for parent in reversed(file_info.path.parent.parts):
+                lowered = parent.casefold()
+                if lowered in ignored or parent in {'', '/'}:
+                    continue
+                words = set(re.findall(r'[a-z0-9]+', lowered))
+                if words & signals or any(place in lowered for place in known):
+                    return safe_context(parent)
+            return None
+
+        def image_collection() -> pathlib.Path:
+            context = travel_context()
+            lowered = file_info.filename.casefold()
+            if context:
+                return pathlib.Path('Travel') / context
+            if 'whatsapp' in lowered or re.search(r'img-\d{8}-wa\d+', lowered):
+                return pathlib.Path('WhatsApp')
+            if (file_info.extension.casefold() in {'.heic', '.heif'} or
+                    re.match(r'^(img_|dsc[_-]?|pxl_|dji_)', lowered)):
+                return pathlib.Path('Camera')
+            return pathlib.Path('Other')
+
+        def video_collection() -> pathlib.Path:
+            searchable = ' '.join((*file_info.path.parent.parts[-4:], file_info.filename)).casefold()
+            lowered = file_info.filename.casefold()
+            if 'insta360' in searchable or re.match(r'^vid_\d{8}_\d{6}_\d{2}_', lowered):
+                return pathlib.Path('Insta360')
+            if ('gopro' in searchable or
+                    re.match(r'^(gopr|g[phx]\d{2}|gx\d{2})\d+', lowered)):
+                return pathlib.Path('GoPro')
+            return pathlib.Path('Other')
         
         if cat == Category.SCREENSHOTS:
             date = self.extract_screenshot_date(file_info.filename) or file_info.created or file_info.modified or datetime.now()
@@ -388,6 +433,14 @@ class Classifier:
             month = date.strftime("%Y-%m")
             root = expand_destination(configured.get('Screenshots', '~/Pictures/Screenshots'))
             return root / year / month / file_info.filename
+
+        elif cat == Category.IMAGES:
+            root = destination_root(cat)
+            return dated_media_root(root, image_collection()) / file_info.filename
+
+        elif cat == Category.VIDEOS:
+            root = destination_root(cat)
+            return dated_media_root(root, video_collection()) / file_info.filename
         
         elif cat == Category.TRAVEL:
             dest, _ = self.detect_travel_destination(file_info.filename, file_info.path)
